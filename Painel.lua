@@ -1,13 +1,13 @@
 --[[
     NOTURNO HUB - PAINEL PRINCIPAL
-    Versão: 0.7.9
+    Versão: 0.8.1
 
     Alterações:
-    - Adicionado ESP de Moedas (Coin ESP) na aba VISUALS.
+    - Contador de moedas movido para o canto inferior direito.
 ]]
 
 local HUB_NAME = "NOTURNO HUB"
-local HUB_VERSION = "0.7.9"
+local HUB_VERSION = "0.8.1"
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -59,7 +59,7 @@ local LastJumpTime = 0
 local RoleCache = {}
 local ESPObjects = {}
 local ESPGun = { Target = nil, Highlight = nil, Billboard = nil }
-local ESPCoins = {} -- Nova tabela para moedas
+local ESPCoins = {}
 local RoleFetchBusy = false
 local LastRoleFetch = 0
 local RoleFetchStart = 0
@@ -118,6 +118,30 @@ local Floating = Create("TextButton", { Name = "FloatingButton", Size = UDim2.fr
 Create("UICorner", { CornerRadius = UDim.new(1,0) }, Floating)
 Create("UIStroke", { Color = Theme.Accent, Thickness = 1.5, Transparency = 0.4 }, Floating)
 
+-- ========== CONTADOR DE MOEDAS (Canto Inferior Direito) ==========
+local CoinCounterFrame = Create("Frame", {
+    Name = "CoinCounter",
+    Size = UDim2.fromOffset(120, 40),
+    Position = UDim2.new(1, -140, 1, -60), -- Canto inferior direito
+    BackgroundColor3 = Color3.fromRGB(20, 20, 25),
+    BackgroundTransparency = 0.3,
+    BorderSizePixel = 0,
+    Visible = false,
+    ZIndex = 100
+}, ScreenGui)
+Create("UICorner", { CornerRadius = UDim.new(0, 8) }, CoinCounterFrame)
+Create("UIStroke", { Color = Color3.fromRGB(255, 215, 0), Thickness = 1.5, Transparency = 0.3 }, CoinCounterFrame)
+
+local CoinCounterText = Create("TextLabel", {
+    Size = UDim2.fromScale(1, 1),
+    BackgroundTransparency = 1,
+    Text = "🪙 Moedas: 0",
+    TextColor3 = Color3.fromRGB(255, 215, 0),
+    TextSize = 14,
+    Font = Enum.Font.GothamBold,
+    TextXAlignment = Enum.TextXAlignment.Center
+}, CoinCounterFrame)
+
 -- ========== ARRASTAR ==========
 local dragging, dragStart, startPos = false,nil,nil
 DragBlock.InputBegan:Connect(function(input)
@@ -148,14 +172,13 @@ local Gameplay = Remotes and Remotes:FindFirstChild("Gameplay")
 local RoleRemote = Gameplay and Gameplay:FindFirstChild("GetCurrentPlayerData")
 local RoundStart = Gameplay and Gameplay:FindFirstChild("RoundStart")
 
--- CORES
 local RoleColors = {
     Innocent = Color3.fromRGB(0,255,70),
     Murderer = Color3.fromRGB(255,35,35),
     Sheriff = Color3.fromRGB(40,130,255),
-    Hero = Color3.fromRGB(0,255,255),     -- Ciano
-    Dead = Color3.fromRGB(50,50,50),      -- Preto/Cinza escuro
-    Unknown = Color3.fromRGB(255,255,255) -- Branco
+    Hero = Color3.fromRGB(0,255,255),
+    Dead = Color3.fromRGB(50,50,50),
+    Unknown = Color3.fromRGB(255,255,255)
 }
 
 local function NormalizeRole(role)
@@ -346,8 +369,8 @@ local function UpdateGunDropESP()
     highlight.Name = "HelloKittyGunDropESP"
     highlight.Adornee = drop
     highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-    highlight.FillColor = Color3.fromRGB(0, 255, 255) -- Ciano
-    highlight.OutlineColor = Color3.fromRGB(0, 255, 255) -- Ciano
+    highlight.FillColor = Color3.fromRGB(0, 255, 255)
+    highlight.OutlineColor = Color3.fromRGB(0, 255, 255)
     highlight.FillTransparency = 0.35
     highlight.OutlineTransparency = 0
     highlight.Parent = ScreenGui
@@ -364,7 +387,7 @@ local function UpdateGunDropESP()
     label.Size = UDim2.fromScale(1, 1)
     label.BackgroundTransparency = 1
     label.Text = "GUN DROP"
-    label.TextColor3 = Color3.fromRGB(0, 255, 255) -- Ciano
+    label.TextColor3 = Color3.fromRGB(0, 255, 255)
     label.TextStrokeColor3 = Color3.new(0, 0, 0)
     label.TextStrokeTransparency = 0.15
     label.Font = Enum.Font.GothamBold
@@ -381,13 +404,13 @@ local function EnableGunESP(state)
     if state then UpdateGunDropESP() else RemoveGunDropESP() end
 end
 
--- ESP COIN (Dourado)
+-- ESP COIN (Apenas Highlight + Contador)
 local function RemoveCoinESP()
     for coin, objects in pairs(ESPCoins) do
         if objects.Highlight then objects.Highlight:Destroy() end
-        if objects.Billboard then objects.Billboard:Destroy() end
     end
     table.clear(ESPCoins)
+    CoinCounterFrame.Visible = false
 end
 
 local function IsCoin(part)
@@ -406,7 +429,6 @@ local function UpdateCoinESP()
         return
     end
 
-    -- Achar o container de moedas
     local container = workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("CoinContainer", true) or workspace:FindFirstChild("CoinContainer", true)
     if not container then
         if next(ESPCoins) then RemoveCoinESP() end
@@ -414,50 +436,34 @@ local function UpdateCoinESP()
     end
 
     local currentCoins = {}
+    local coinCount = 0
+    
     for _, coin in ipairs(container:GetDescendants()) do
         if IsCoin(coin) then
             currentCoins[coin] = true
+            coinCount = coinCount + 1
             if not ESPCoins[coin] then
-                -- Criar novo ESP para essa moeda
                 local highlight = Instance.new("Highlight")
                 highlight.Name = "CoinESP"
                 highlight.Adornee = coin
                 highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-                highlight.FillColor = Color3.fromRGB(255, 215, 0) -- Dourado
+                highlight.FillColor = Color3.fromRGB(255, 215, 0)
                 highlight.OutlineColor = Color3.fromRGB(255, 255, 0)
                 highlight.FillTransparency = 0.4
                 highlight.OutlineTransparency = 0
                 highlight.Parent = ScreenGui
 
-                local billboard = Instance.new("BillboardGui")
-                billboard.Name = "CoinLabel"
-                billboard.Adornee = coin
-                billboard.Size = UDim2.fromOffset(80, 24)
-                billboard.StudsOffset = Vector3.new(0, 1.5, 0)
-                billboard.AlwaysOnTop = true
-                billboard.Parent = ScreenGui
-
-                local label = Instance.new("TextLabel")
-                label.Size = UDim2.fromScale(1, 1)
-                label.BackgroundTransparency = 1
-                label.Text = "COIN"
-                label.TextColor3 = Color3.fromRGB(255, 255, 0)
-                label.TextStrokeColor3 = Color3.new(0, 0, 0)
-                label.TextStrokeTransparency = 0.15
-                label.Font = Enum.Font.GothamBold
-                label.TextSize = 12
-                label.Parent = billboard
-
-                ESPCoins[coin] = { Highlight = highlight, Billboard = billboard }
+                ESPCoins[coin] = { Highlight = highlight }
             end
         end
     end
 
-    -- Remover ESPs de moedas que não existem mais
+    CoinCounterFrame.Visible = true
+    CoinCounterText.Text = "🪙 Moedas: " .. coinCount
+
     for coin, objects in pairs(ESPCoins) do
         if not currentCoins[coin] or not coin.Parent then
             if objects.Highlight then objects.Highlight:Destroy() end
-            if objects.Billboard then objects.Billboard:Destroy() end
             ESPCoins[coin] = nil
         end
     end
