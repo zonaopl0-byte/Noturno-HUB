@@ -1,13 +1,16 @@
 --[[
     NOTURNO HUB - PAINEL PRINCIPAL
-    Versão: 0.8.1
+    Versão: 0.9.5
 
     Alterações:
-    - Contador de moedas movido para o canto inferior direito.
+    - GetRole volta a retornar "Unknown" como padrão
+    - RoleColors inclui Unknown (branco)
+    - ESP Player mostra "Unknown" quando não consegue identificar a role
+    - TpToMap com detecção em cascata (v0.9.4 mantido)
 ]]
 
 local HUB_NAME = "NOTURNO HUB"
-local HUB_VERSION = "0.8.1"
+local HUB_VERSION = "0.9.5"
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -16,6 +19,7 @@ local HttpService = game:GetService("HttpService")
 local TweenService = game:GetService("TweenService")
 local VirtualUser = game:GetService("VirtualUser")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Lighting = game:GetService("Lighting")
 
 local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
@@ -45,7 +49,8 @@ local Settings = {
     Noclip = false, AntiFling = false, AntiAfk = false,
     FlyEnabled = false, InfJump = false, LimitInfJump = false,
     WalkSpeedEnabled = false, JumpPowerEnabled = false,
-    ESP_Players = false, ESP_Gun = false, ESP_Coin = false
+    ESP_Players = false, ESP_Gun = false, ESP_Coin = false,
+    XRay = false, Fullbright = false
 }
 
 -- ========== VARIÁVEIS GLOBAIS ==========
@@ -55,6 +60,11 @@ local OriginalCollision = {}
 local InfJumpCount = 0
 local LastJumpTime = 0
 
+-- X-Ray e Fullbright
+local XRayOriginal = {}
+local XRayConnection
+local FullbrightOriginal = nil
+
 -- ESP Variables
 local RoleCache = {}
 local ESPObjects = {}
@@ -63,6 +73,13 @@ local ESPCoins = {}
 local RoleFetchBusy = false
 local LastRoleFetch = 0
 local RoleFetchStart = 0
+
+-- Teleport Variables
+local SavedWaypoint = nil
+
+-- Declarações forward
+local ToggleButtons = {}
+local ResetAllToggles = nil
 
 -- ========== UTIL ==========
 local function Create(className, properties, parent)
@@ -118,11 +135,11 @@ local Floating = Create("TextButton", { Name = "FloatingButton", Size = UDim2.fr
 Create("UICorner", { CornerRadius = UDim.new(1,0) }, Floating)
 Create("UIStroke", { Color = Theme.Accent, Thickness = 1.5, Transparency = 0.4 }, Floating)
 
--- ========== CONTADOR DE MOEDAS (Canto Inferior Direito) ==========
+-- ========== CONTADOR DE MOEDAS ==========
 local CoinCounterFrame = Create("Frame", {
     Name = "CoinCounter",
     Size = UDim2.fromOffset(120, 40),
-    Position = UDim2.new(1, -140, 1, -60), -- Canto inferior direito
+    Position = UDim2.new(1, -140, 1, -60),
     BackgroundColor3 = Color3.fromRGB(20, 20, 25),
     BackgroundTransparency = 0.3,
     BorderSizePixel = 0,
@@ -172,6 +189,7 @@ local Gameplay = Remotes and Remotes:FindFirstChild("Gameplay")
 local RoleRemote = Gameplay and Gameplay:FindFirstChild("GetCurrentPlayerData")
 local RoundStart = Gameplay and Gameplay:FindFirstChild("RoundStart")
 
+-- RoleColors com Unknown (branco) de volta
 local RoleColors = {
     Innocent = Color3.fromRGB(0,255,70),
     Murderer = Color3.fromRGB(255,35,35),
@@ -195,7 +213,7 @@ local function RefreshRoles(force)
     if RoleFetchBusy then
         if os.clock() - RoleFetchStart > 5 then RoleFetchBusy = false else return end
     end
-    if not force and os.clock() - LastRoleFetch < 1 then return end
+    if not force and os.clock() - LastRoleFetch < 3 then return end
     LastRoleFetch = os.clock()
     if not RoleRemote or not RoleRemote.Parent then
         local remotes = ReplicatedStorage:FindFirstChild("Remotes")
@@ -218,14 +236,15 @@ local function GetPlayerTool(player, name)
     return (character and character:FindFirstChild(name)) or (backpack and backpack:FindFirstChild(name))
 end
 
+-- GetRole volta a retornar "Unknown" como padrão
 local function GetRole(player)
     local char = player.Character
     local hum = char and char:FindFirstChildOfClass("Humanoid")
-    if hum and hum.Health <= 0 then return "Dead" end
+    if not hum or hum.Health <= 0 then return "Dead" end
 
     local entry = RoleCache[player.Name] or RoleCache[player.UserId] or RoleCache[tostring(player.UserId)]
     if type(entry) == "table" then
-        if entry.Dead == true or entry.dead == true then return "Dead" end
+        if entry.Dead then return "Dead" end
         local role = NormalizeRole(entry.Role or entry.role)
         if role then return role end
     elseif type(entry) == "string" then
@@ -233,18 +252,9 @@ local function GetRole(player)
         if role then return role end
     end
 
-    if player:GetAttribute("Dead") == true then return "Dead" end
-    local attributeRole = NormalizeRole(player:GetAttribute("Role"))
-    if attributeRole then return attributeRole end
-    
-    if player.Team then
-        local teamRole = NormalizeRole(player.Team.Name)
-        if teamRole then return teamRole end
-    end
-
     if GetPlayerTool(player, "Knife") then return "Murderer" end
-    if GetPlayerTool(player, "Gun") then return "Sheriff" end
-    
+    if GetPlayerTool(player, "Gun") or GetPlayerTool(player, "Revolver") then return "Sheriff" end
+
     return "Unknown"
 end
 
@@ -263,7 +273,7 @@ local function CreateESP(player)
     local head = character and character:FindFirstChild("Head")
     if not character or not head then return end
     RemoveESP(player)
-    
+
     local role = GetRole(player)
     local color = RoleColors[role] or RoleColors.Unknown
 
@@ -339,7 +349,7 @@ local function EnableESP(enabled)
     end
 end
 
--- ESP GUN DROP (Ciano)
+-- ESP GUN DROP
 local function RemoveGunDropESP()
     if ESPGun.Highlight then ESPGun.Highlight:Destroy(); ESPGun.Highlight = nil end
     if ESPGun.Billboard then ESPGun.Billboard:Destroy(); ESPGun.Billboard = nil end
@@ -404,7 +414,7 @@ local function EnableGunESP(state)
     if state then UpdateGunDropESP() else RemoveGunDropESP() end
 end
 
--- ESP COIN (Apenas Highlight + Contador)
+-- ESP COIN
 local function RemoveCoinESP()
     for coin, objects in pairs(ESPCoins) do
         if objects.Highlight then objects.Highlight:Destroy() end
@@ -414,13 +424,22 @@ local function RemoveCoinESP()
 end
 
 local function IsCoin(part)
-    if not part or not part.Parent then return false end
-    if not part:IsA("BasePart") then return false end
+    if not part or not part.Parent or not part:IsA("BasePart") then return false end
     if part:GetAttribute("Collected") == true then return false end
+    if part.Name == "Coin" then return true end
     if part:FindFirstChild("CoinVisual") then return true end
     if part:FindFirstChild("Visual") then return true end
     if part.Name:lower():find("coin") then return true end
     return false
+end
+
+local function GetCoinContainer()
+    local map = workspace:FindFirstChild("Map")
+    local container = map and map:FindFirstChild("CoinContainer")
+    if not container then
+        container = workspace:FindFirstChild("CoinContainer", true)
+    end
+    return container
 end
 
 local function UpdateCoinESP()
@@ -429,7 +448,7 @@ local function UpdateCoinESP()
         return
     end
 
-    local container = workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("CoinContainer", true) or workspace:FindFirstChild("CoinContainer", true)
+    local container = GetCoinContainer()
     if not container then
         if next(ESPCoins) then RemoveCoinESP() end
         return
@@ -437,7 +456,7 @@ local function UpdateCoinESP()
 
     local currentCoins = {}
     local coinCount = 0
-    
+
     for _, coin in ipairs(container:GetDescendants()) do
         if IsCoin(coin) then
             currentCoins[coin] = true
@@ -475,27 +494,345 @@ local function EnableCoinESP(state)
 end
 
 -- ============================================================
+-- X-RAY
+-- ============================================================
+
+local function IsPlayerCharacterPart(part)
+    for _, player in ipairs(Players:GetPlayers()) do
+        local character = player.Character
+        if character and part:IsDescendantOf(character) then
+            return true
+        end
+    end
+    return false
+end
+
+local function ApplyXRay(part)
+    if not part:IsA("BasePart") then return end
+    if IsPlayerCharacterPart(part) then return end
+
+    if XRayOriginal[part] == nil then
+        XRayOriginal[part] = part.LocalTransparencyModifier
+    end
+
+    part.LocalTransparencyModifier = 0.65
+end
+
+local function EnableXRay(state)
+    Settings.XRay = state
+
+    if XRayConnection then
+        XRayConnection:Disconnect()
+        XRayConnection = nil
+    end
+
+    if state then
+        for _, part in ipairs(workspace:GetDescendants()) do
+            ApplyXRay(part)
+        end
+
+        XRayConnection = workspace.DescendantAdded:Connect(function(part)
+            task.defer(function()
+                if Settings.XRay and part.Parent then
+                    ApplyXRay(part)
+                end
+            end)
+        end)
+    else
+        for part, original in pairs(XRayOriginal) do
+            if part and part.Parent then
+                part.LocalTransparencyModifier = original
+            end
+        end
+
+        table.clear(XRayOriginal)
+    end
+end
+
+-- ============================================================
+-- FULLBRIGHT
+-- ============================================================
+
+local function EnableFullbright(state)
+    Settings.Fullbright = state
+
+    if state then
+        if not FullbrightOriginal then
+            FullbrightOriginal = {
+                ClockTime = Lighting.ClockTime,
+                Brightness = Lighting.Brightness,
+                Ambient = Lighting.Ambient,
+                OutdoorAmbient = Lighting.OutdoorAmbient,
+                GlobalShadows = Lighting.GlobalShadows,
+                ExposureCompensation = Lighting.ExposureCompensation
+            }
+        end
+
+        Lighting.ClockTime = 14
+        Lighting.Brightness = 3
+        Lighting.Ambient = Color3.new(1, 1, 1)
+        Lighting.OutdoorAmbient = Color3.new(1, 1, 1)
+        Lighting.GlobalShadows = false
+        Lighting.ExposureCompensation = 0.3
+    else
+        if FullbrightOriginal then
+            for property, value in pairs(FulbrightOriginal) do
+                Lighting[property] = value
+            end
+            FullbrightOriginal = nil
+        end
+    end
+end
+
+-- ============================================================
+-- TELEPORTE (MM2)
+-- ============================================================
+
+local function SetTPStatus(msg)
+    if TeleportStatus and TeleportStatus.Parent then
+        TeleportStatus.Text = "Status: " .. msg
+    end
+end
+
+local function DoTeleport(targetPos)
+    local char = LocalPlayer.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    if not root then SetTPStatus("Personagem não encontrado."); return false end
+    if not targetPos then SetTPStatus("Destino inválido."); return false end
+
+    local tempNoclip = false
+    if not Settings.Noclip then
+        tempNoclip = true
+        for _, part in ipairs(char:GetDescendants()) do
+            if part:IsA("BasePart") then
+                if OriginalCollision[part] == nil then OriginalCollision[part] = part.CanCollide end
+                part.CanCollide = false
+            end
+        end
+    end
+
+    root.CFrame = CFrame.new(targetPos + Vector3.new(0, 3, 0))
+
+    if tempNoclip then
+        task.delay(0.3, function()
+            if not Settings.Noclip then
+                for part, orig in pairs(OriginalCollision) do
+                    if part and part.Parent then part.CanCollide = orig end
+                end
+                table.clear(OriginalCollision)
+            end
+        end)
+    end
+
+    return true
+end
+
+local function TpToPlayer(player)
+    if not player or player == LocalPlayer then SetTPStatus("Jogador inválido."); return end
+    local char = player.Character
+    local targetRoot = char and char:FindFirstChild("HumanoidRootPart")
+    if not targetRoot then SetTPStatus("Jogador não spawnou ainda."); return end
+    if DoTeleport(targetRoot.Position) then
+        SetTPStatus("Teleportado para " .. player.Name .. ".")
+    end
+end
+
+local function TpToMurderer()
+    RefreshRoles(true)
+    task.wait(0.5)
+
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= LocalPlayer and GetRole(p) == "Murderer" then
+            TpToPlayer(p)
+            SetTPStatus("TP para o Murderer (" .. p.Name .. ").")
+            return
+        end
+    end
+    SetTPStatus("Murderer não encontrado (ou você é o Murderer).")
+end
+
+local function TpToSheriff()
+    RefreshRoles(true)
+    task.wait(0.5)
+
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= LocalPlayer and GetRole(p) == "Sheriff" then
+            TpToPlayer(p)
+            SetTPStatus("TP para o Xerife (" .. p.Name .. ").")
+            return
+        end
+    end
+    SetTPStatus("Xerife não encontrado (ou você é o Xerife).")
+end
+
+local function TpToLobby()
+    local lobbyPos
+
+    local lobby = workspace:FindFirstChild("Lobby")
+    if not lobby then
+        for _, obj in ipairs(workspace:GetDescendants()) do
+            if obj.Name:lower() == "lobby" then
+                lobby = obj
+                break
+            end
+        end
+    end
+
+    if lobby then
+        if lobby:IsA("Model") then
+            if lobby.PrimaryPart then
+                lobbyPos = lobby.PrimaryPart.Position
+            else
+                local part = lobby:FindFirstChildWhichIsA("BasePart", true)
+                if part then lobbyPos = part.Position end
+            end
+        elseif lobby:IsA("BasePart") then
+            lobbyPos = lobby.Position
+        end
+    end
+
+    if not lobbyPos then
+        local map = workspace:FindFirstChild("Map")
+        for _, sl in ipairs(workspace:GetDescendants()) do
+            if sl:IsA("SpawnLocation") then
+                if not (map and sl:IsDescendantOf(map)) then
+                    lobbyPos = sl.Position
+                    break
+                end
+            end
+        end
+    end
+
+    if not lobbyPos then
+        local char = LocalPlayer.Character
+        local root = char and char:FindFirstChild("HumanoidRootPart")
+        if root then lobbyPos = root.Position end
+    end
+
+    if not lobbyPos then SetTPStatus("Lobby não encontrado."); return end
+    if DoTeleport(lobbyPos) then SetTPStatus("Teleportado para o lobby.") end
+end
+
+local function TpToMap()
+    local map = workspace:FindFirstChild("Map")
+
+    if not map then
+        for _, obj in ipairs(workspace:GetChildren()) do
+            if (obj:IsA("Model") or obj:IsA("Folder")) and obj.Name:lower():find("map") then
+                map = obj
+                break
+            end
+        end
+    end
+
+    if not map then
+        local biggest, biggestSize = nil, 0
+        for _, obj in ipairs(workspace:GetChildren()) do
+            if obj:IsA("Model") then
+                local isChar = false
+                for _, p in ipairs(Players:GetPlayers()) do
+                    if p.Character == obj then isChar = true; break end
+                end
+                if not isChar then
+                    local _, size = obj:GetBoundingBox()
+                    local volume = size.X * size.Y * size.Z
+                    if volume > biggestSize then
+                        biggest, biggestSize = obj, volume
+                    end
+                end
+            end
+        end
+        map = biggest
+    end
+
+    if not map then SetTPStatus("Mapa do round não encontrado."); return end
+
+    local spawnPos
+
+    for _, obj in ipairs(map:GetDescendants()) do
+        if obj:IsA("SpawnLocation") then
+            spawnPos = obj.Position
+            break
+        end
+    end
+
+    if not spawnPos and map:IsA("Model") and map.PrimaryPart then
+        spawnPos = map.PrimaryPart.Position
+    end
+
+    if not spawnPos then
+        local part = map:FindFirstChildWhichIsA("BasePart", true)
+        if part then spawnPos = part.Position end
+    end
+
+    if not spawnPos then
+        for _, p in ipairs(Players:GetPlayers()) do
+            if p ~= LocalPlayer then
+                local c = p.Character
+                local r = c and c:FindFirstChild("HumanoidRootPart")
+                local h = c and c:FindFirstChildOfClass("Humanoid")
+                if r and h and h.Health > 0 then
+                    spawnPos = r.Position
+                    break
+                end
+            end
+        end
+    end
+
+    if not spawnPos then
+        SetTPStatus("Não foi possível localizar um ponto no mapa.")
+        return
+    end
+
+    if DoTeleport(spawnPos) then
+        SetTPStatus("Teleportado para o mapa do round.")
+    end
+end
+
+local function SaveWaypoint()
+    local char = LocalPlayer.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    if not root then SetTPStatus("Personagem não encontrado."); return end
+    SavedWaypoint = root.Position
+    SetTPStatus(string.format("Waypoint salvo (%.0f, %.0f, %.0f).", SavedWaypoint.X, SavedWaypoint.Y, SavedWaypoint.Z))
+end
+
+local function TpToWaypoint()
+    if not SavedWaypoint then SetTPStatus("Nenhum waypoint salvo."); return end
+    if DoTeleport(SavedWaypoint) then SetTPStatus("Teleportado para o waypoint.") end
+end
+
+local function ClearWaypoint()
+    SavedWaypoint = nil
+    SetTPStatus("Waypoint limpo.")
+end
+
+-- ============================================================
 -- UNLOAD
 -- ============================================================
+
 local function UnloadHub()
     Settings.FlyEnabled = false
     if FlyConnection then FlyConnection:Disconnect(); FlyConnection = nil end
     if FlyVelocity then FlyVelocity:Destroy(); FlyVelocity = nil end
     if FlyGyro then FlyGyro:Destroy(); FlyGyro = nil end
-    
+
     Settings.Noclip = false
     for part, orig in pairs(OriginalCollision) do
         if part and part.Parent then part.CanCollide = orig end
     end
     table.clear(OriginalCollision)
-    
+
     Settings.AntiFling = false
     if AntiFlingConnection then AntiFlingConnection:Disconnect(); AntiFlingConnection = nil end
     Settings.AntiAfk = false
     if AntiAfkConnection then AntiAfkConnection:Disconnect(); AntiAfkConnection = nil end
     Settings.InfJump = false
     if InfJumpConnection then InfJumpConnection:Disconnect(); InfJumpConnection = nil end
-    
+
+    EnableXRay(false)
+    EnableFullbright(false)
+
     Settings.ESP_Players = false
     for player in pairs(ESPObjects) do RemoveESP(player) end
     Settings.ESP_Gun = false
@@ -503,12 +840,15 @@ local function UnloadHub()
     Settings.ESP_Coin = false
     RemoveCoinESP()
 
+    if ResetAllToggles then ResetAllToggles() end
+
     local char = LocalPlayer.Character
     local hum = char and char:FindFirstChildOfClass("Humanoid")
     if hum then
         hum.PlatformStand = false; hum.AutoRotate = true
         hum.WalkSpeed = 16; hum.UseJumpPower = true; hum.JumpPower = 50
     end
+
     ScreenGui:Destroy()
     if LoaderGui then LoaderGui:Destroy() end
     print("[" .. HUB_NAME .. "] Hub desexecutado e todas as funções desativadas.")
@@ -534,6 +874,7 @@ end)
 -- ============================================================
 -- ABAS
 -- ============================================================
+
 local Sidebar = Create("ScrollingFrame", { Name = "Sidebar", Size = UDim2.new(0,160,1,-78), Position = UDim2.fromOffset(8,70), BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 3, AutomaticCanvasSize = Enum.AutomaticSize.Y, ScrollBarImageColor3 = Theme.Accent, ZIndex = 2 }, Main)
 Create("UIListLayout", { Padding = UDim.new(0,8), SortOrder = Enum.SortOrder.LayoutOrder }, Sidebar)
 local PagesContainer = Create("Frame", { Name = "PagesContainer", Size = UDim2.new(1,-182,1,-80), Position = UDim2.fromOffset(174,70), BackgroundTransparency = 1, ZIndex = 2 }, Main)
@@ -589,8 +930,17 @@ SelectPage("PLAYER")
 -- ============================================================
 -- BOTÕES E SLIDERS
 -- ============================================================
-local ToggleButtons = {}
+
 local SliderObjects = {}
+
+ResetAllToggles = function()
+    for key, item in pairs(ToggleButtons) do
+        if Settings[key] ~= nil then
+            Settings[key] = false
+            item.Update(false)
+        end
+    end
+end
 
 local function AddButton(page,text,callback)
     local button = Create("TextButton", { Size = UDim2.new(1,-6,0,30), BackgroundColor3 = Theme.Button, Text = text, TextColor3 = Theme.Text, TextSize = 11, Font = Enum.Font.GothamBold }, page)
@@ -666,6 +1016,7 @@ local function CreateCustomToggle(page, title, setting, callback)
 end
 
 -- ========== ABA PLAYER ==========
+
 CreateCustomToggle(PlayerPage, "Noclip","Noclip",function(state)
     if not state then
         for part,orig in pairs(OriginalCollision) do
@@ -809,7 +1160,6 @@ RunService.Stepped:Connect(function()
     end
 end)
 
--- Loop Principal (Speed/Jump/Noclip)
 RunService.Stepped:Connect(function()
     local char = LocalPlayer.Character
     local hum = char and char:FindFirstChildOfClass("Humanoid")
@@ -831,19 +1181,104 @@ RunService.Stepped:Connect(function()
 end)
 
 -- ============================================================
--- ABA VISUALS (ESPs)
+-- ABA VISUALS
 -- ============================================================
-CreateCustomToggle(VisualsPage, "ESP Jogadores","ESP_Players",function(state)
-    EnableESP(state)
+
+CreateCustomToggle(VisualsPage, "ESP Player","ESP_Players",function(state) EnableESP(state) end)
+CreateCustomToggle(VisualsPage, "ESP Gun","ESP_Gun",function(state) EnableGunESP(state) end)
+CreateCustomToggle(VisualsPage, "ESP Coin","ESP_Coin",function(state) EnableCoinESP(state) end)
+CreateCustomToggle(VisualsPage, "X-Ray","XRay",function(state) EnableXRay(state) end)
+CreateCustomToggle(VisualsPage, "FullBright","Fullbright",function(state) EnableFullbright(state) end)
+
+-- ============================================================
+-- ABA TELEPORTE
+-- ============================================================
+
+local TeleportStatus = Create("TextLabel", {
+    Size = UDim2.new(1,-6,0,34),
+    BackgroundTransparency = 1,
+    Text = "Status: Pronto.",
+    TextColor3 = Theme.Text,
+    TextSize = 10,
+    Font = Enum.Font.Gotham,
+    TextWrapped = true,
+    TextXAlignment = Enum.TextXAlignment.Left
+}, TeleportPage.Rows)
+
+local PlayerSelectLabel = Create("TextLabel", {
+    Size = UDim2.new(1,-6,0,20),
+    BackgroundTransparency = 1,
+    Text = "👤 Teleportar para jogador",
+    TextColor3 = Theme.Text,
+    TextSize = 11,
+    Font = Enum.Font.GothamBold,
+    TextXAlignment = Enum.TextXAlignment.Left
+}, TeleportPage.Rows)
+
+local PlayerListBtn = AddButton(TeleportPage.Rows, "Selecionar jogador  ▼", function() end)
+local PlayerList = Create("Frame", { Size = UDim2.new(1,-6,0,0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1, Visible = false }, TeleportPage.Rows)
+Create("UIListLayout", { Padding = UDim.new(0,4), SortOrder = Enum.SortOrder.LayoutOrder }, PlayerList)
+
+local SelectedPlayer = nil
+local function RefreshPlayerList()
+    for _, child in ipairs(PlayerList:GetChildren()) do
+        if child:IsA("TextButton") then child:Destroy() end
+    end
+    local players = Players:GetPlayers()
+    for i, p in ipairs(players) do
+        if p ~= LocalPlayer then
+            local btn = Create("TextButton", {
+                Size = UDim2.new(1,0,0,26),
+                BackgroundColor3 = Theme.Track,
+                Text = p.Name,
+                TextColor3 = Theme.Text,
+                TextSize = 11,
+                Font = Enum.Font.Gotham,
+                LayoutOrder = i
+            }, PlayerList)
+            Create("UICorner", { CornerRadius = UDim.new(0,6) }, btn)
+            btn.MouseButton1Click:Connect(function()
+                SelectedPlayer = p
+                PlayerListBtn.Text = "Jogador: " .. p.Name .. "  ▼"
+                PlayerList.Visible = false
+                SetTPStatus("Selecionado: " .. p.Name)
+            end)
+        end
+    end
+end
+
+PlayerListBtn.MouseButton1Click:Connect(function()
+    RefreshPlayerList()
+    PlayerList.Visible = not PlayerList.Visible
 end)
 
-CreateCustomToggle(VisualsPage, "ESP Gun Drop","ESP_Gun",function(state)
-    EnableGunESP(state)
+AddButton(TeleportPage.Rows, "📍 Teleportar para jogador selecionado", function()
+    if not SelectedPlayer then SetTPStatus("Selecione um jogador primeiro."); return end
+    TpToPlayer(SelectedPlayer)
 end)
 
-CreateCustomToggle(VisualsPage, "ESP Moedas","ESP_Coin",function(state)
-    EnableCoinESP(state)
-end)
+AddButton(TeleportPage.Rows, "🔪 Teleportar para o Murderer", function() TpToMurderer() end)
+AddButton(TeleportPage.Rows, "🔫 Teleportar para o Xerife", function() TpToSheriff() end)
+AddButton(TeleportPage.Rows, "🚪 Teleportar para o Lobby", function() TpToLobby() end)
+AddButton(TeleportPage.Rows, "🗺 Teleportar para o Mapa (Round)", function() TpToMap() end)
+
+Create("TextLabel", {
+    Size = UDim2.new(1,-6,0,20),
+    BackgroundTransparency = 1,
+    Text = "📌 Waypoint",
+    TextColor3 = Theme.Text,
+    TextSize = 11,
+    Font = Enum.Font.GothamBold,
+    TextXAlignment = Enum.TextXAlignment.Left
+}, TeleportPage.Rows)
+
+AddButton(TeleportPage.Rows, "💾 Salvar waypoint aqui", function() SaveWaypoint() end)
+AddButton(TeleportPage.Rows, "🎯 Teleportar para waypoint", function() TpToWaypoint() end)
+AddButton(TeleportPage.Rows, "🗑 Limpar waypoint", function() ClearWaypoint() end)
+
+-- ============================================================
+-- LOOPS DE ESP
+-- ============================================================
 
 task.spawn(function()
     while ScreenGui.Parent do
@@ -864,7 +1299,7 @@ end)
 task.spawn(function()
     while ScreenGui.Parent do
         if Settings.ESP_Players then pcall(UpdateESP) end
-        task.wait(1)
+        task.wait(3)
     end
 end)
 
@@ -872,11 +1307,25 @@ Players.PlayerRemoving:Connect(function(player)
     RemoveESP(player)
     RoleCache[player.Name] = nil
     RoleCache[player.UserId] = nil
+    if SelectedPlayer == player then
+        SelectedPlayer = nil
+        PlayerListBtn.Text = "Selecionar jogador  ▼"
+    end
+end)
+
+Players.PlayerAdded:Connect(function()
+    if PlayerList.Visible then RefreshPlayerList() end
 end)
 
 if RoundStart and RoundStart:IsA("RemoteEvent") then
     RoundStart.OnClientEvent:Connect(function()
         table.clear(RoleCache)
+
+        if Settings.Fullbright then
+            FullbrightOriginal = nil
+            EnableFullbright(true)
+        end
+
         if Settings.ESP_Players then
             task.delay(1,function() RefreshRoles(true); UpdateESP() end)
         end
@@ -886,6 +1335,7 @@ end
 -- ============================================================
 -- ABA ABOUT
 -- ============================================================
+
 local AboutRow = Create("Frame", { Size = UDim2.new(1,-12,0,0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1 }, AboutPage.Rows)
 local AboutLeft = Create("Frame", { Size = UDim2.new(0.47,0,0,65), Position = UDim2.new(0.01,0,0,0), BackgroundColor3 = Theme.Button, BorderSizePixel = 0 }, AboutRow)
 Create("UICorner", { CornerRadius = UDim.new(0,8) }, AboutLeft)
@@ -896,6 +1346,7 @@ local AboutVersion = Create("TextLabel", { Size = UDim2.new(1,0,0,20), Position 
 -- ============================================================
 -- TEMAS
 -- ============================================================
+
 local ApplyTheme
 local ThemeSelector, ThemeOptions
 local ThemeOptionButtons = {}
@@ -943,6 +1394,7 @@ end
 -- ============================================================
 -- CONFIG
 -- ============================================================
+
 local ConfigRows = ConfigPage.Rows
 ThemeSelector = AddButton(ConfigRows, "Tema: " .. CurrentTheme .. "  ▼", function() ThemeOptions.Visible = not ThemeOptions.Visible end)
 ThemeOptions = Create("Frame", { Name = "ThemeOptions", Size = UDim2.new(1,-6,0,0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1, Visible = false }, ConfigRows)
@@ -1025,7 +1477,15 @@ local function LoadConfig(name)
         if Settings[key] == true and item.Callback then pcall(item.Callback, false) end
         Settings[key] = false; item.Update(false)
     end
-    local order = { "AntiFling", "AntiAfk", "Noclip", "WalkSpeedEnabled", "JumpPowerEnabled", "FlyEnabled", "InfJump", "LimitInfJump", "ESP_Players", "ESP_Gun", "ESP_Coin" }
+
+    local order = {
+        "AntiFling", "AntiAfk", "Noclip",
+        "WalkSpeedEnabled", "JumpPowerEnabled",
+        "FlyEnabled", "InfJump", "LimitInfJump",
+        "XRay", "Fullbright",
+        "ESP_Players", "ESP_Gun", "ESP_Coin"
+    }
+
     for _, key in ipairs(order) do
         local item = ToggleButtons[key]; local value = data.Settings[key]
         if item and type(value) == "boolean" then
@@ -1115,6 +1575,7 @@ if type(isfile) == "function" and type(readfile) == "function" and isfile(AutoLo
     local ok, name = pcall(readfile, AutoLoadPath)
     if ok and type(name) == "string" then task.wait(0.5); LoadConfig(name) end
 end
+
 RefreshConfigs()
 task.wait(DURACAO)
 Main.Visible = true
