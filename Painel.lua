@@ -1,16 +1,15 @@
 --[[
     NOTURNO HUB - PAINEL PRINCIPAL
-    Versão: 0.9.5
+    Versão: 0.9.6
 
     Alterações:
+    - ESP Player atualiza visualmente a cada 0.5s (era 3s)
+    - Fetch de roles continua protegido por 3s (evita rate-limit/kick)
     - GetRole volta a retornar "Unknown" como padrão
-    - RoleColors inclui Unknown (branco)
-    - ESP Player mostra "Unknown" quando não consegue identificar a role
-    - TpToMap com detecção em cascata (v0.9.4 mantido)
 ]]
 
 local HUB_NAME = "NOTURNO HUB"
-local HUB_VERSION = "0.9.5"
+local HUB_VERSION = "0.9.6"
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -189,7 +188,6 @@ local Gameplay = Remotes and Remotes:FindFirstChild("Gameplay")
 local RoleRemote = Gameplay and Gameplay:FindFirstChild("GetCurrentPlayerData")
 local RoundStart = Gameplay and Gameplay:FindFirstChild("RoundStart")
 
--- RoleColors com Unknown (branco) de volta
 local RoleColors = {
     Innocent = Color3.fromRGB(0,255,70),
     Murderer = Color3.fromRGB(255,35,35),
@@ -236,7 +234,6 @@ local function GetPlayerTool(player, name)
     return (character and character:FindFirstChild(name)) or (backpack and backpack:FindFirstChild(name))
 end
 
--- GetRole volta a retornar "Unknown" como padrão
 local function GetRole(player)
     local char = player.Character
     local hum = char and char:FindFirstChildOfClass("Humanoid")
@@ -312,9 +309,9 @@ local function CreateESP(player)
     }
 end
 
+-- UpdateESP só mexe no visual (rápido) — fetch é feito à parte
 local function UpdateESP()
     if not Settings.ESP_Players then return end
-    RefreshRoles(false)
     for _,player in ipairs(Players:GetPlayers()) do
         if player ~= LocalPlayer then
             local character = player.Character
@@ -1296,9 +1293,17 @@ task.spawn(function()
     RemoveCoinESP()
 end)
 
+-- ESP Player: visual rápido (0.5s) + fetch de roles separado (3s)
 task.spawn(function()
     while ScreenGui.Parent do
         if Settings.ESP_Players then pcall(UpdateESP) end
+        task.wait(0.5)
+    end
+end)
+
+task.spawn(function()
+    while ScreenGui.Parent do
+        if Settings.ESP_Players then pcall(RefreshRoles, false) end
         task.wait(3)
     end
 end)
@@ -1327,7 +1332,7 @@ if RoundStart and RoundStart:IsA("RemoteEvent") then
         end
 
         if Settings.ESP_Players then
-            task.delay(1,function() RefreshRoles(true); UpdateESP() end)
+            task.delay(0.5, function() RefreshRoles(true); UpdateESP() end)
         end
     end)
 end
