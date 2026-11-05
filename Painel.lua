@@ -1,18 +1,17 @@
 --[[
-    NOTURNO HUB - v0.5.8
-    - AutoFarm ativa o Noclip automaticamente enquanto estiver ligado.
-    - Noclip é desativado ao parar o farm ou ao morrer.
+    NOTURNO HUB - PAINEL PRINCIPAL
+    Versão: 0.6.2
+    - Aba FARM removida.
+    - AutoFarm removido. Apenas o painel visual, temas e salvamento.
 ]]
 
 local HUB_NAME = "NOTURNO HUB"
-local HUB_VERSION = "0.5.8"
+local HUB_VERSION = "0.6.2"
 
 local Players = game:GetService("Players")
-local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 local HttpService = game:GetService("HttpService")
 local TweenService = game:GetService("TweenService")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
@@ -36,254 +35,10 @@ local ThemePreviews = { Noturno = Color3.fromRGB(160, 120, 255), Neon = Color3.f
 
 -- ========== SETTINGS ==========
 local Settings = {
-    WalkSpeed = 16, JumpPower = 50, FlySpeed = 50,
-    FarmSpeed = 25, AvoidMurderer = true, AvoidSheriff = false, ResetWhenFull = true
+    WalkSpeed = 16,
+    JumpPower = 50,
+    FlySpeed = 50,
 }
-
--- ========== LÓGICA DO AUTOFARM ==========
-local FarmConnection = nil
-local FarmVelocity = nil
-local FarmAttachment = nil
-local FarmTarget = nil
-local IsFarming = false
-local ResettingForFull = false
-local BagCurrent = nil
-local BagMaximum = nil
-local OriginalCollision = {}
-local FarmCooldown = 0
-local NoclipConnection = nil
-
--- ========== VERIFICAÇÃO DE FUNÇÃO (ROLE) ==========
-local Remotes = ReplicatedStorage:FindFirstChild("Remotes")
-local Gameplay = Remotes and Remotes:FindFirstChild("Gameplay")
-local RoleRemote = Gameplay and Gameplay:FindFirstChild("GetCurrentPlayerData")
-local CoinCollected = Gameplay and Gameplay:FindFirstChild("CoinCollected")
-local RoleCache = {}
-
-local function RefreshRoles()
-    if not RoleRemote then return end
-    task.spawn(function()
-        local success, roster = pcall(function() return RoleRemote:InvokeServer() end)
-        if success and type(roster) == "table" then RoleCache = roster end
-    end)
-end
-
-local function GetRole(player)
-    local entry = RoleCache[player.Name] or RoleCache[player.UserId]
-    if type(entry) == "table" then
-        if entry.Dead == true then return "Dead" end
-        if entry.Role then return entry.Role end
-    end
-    local char = player.Character
-    local back = player.Backpack
-    if (char and char:FindFirstChild("Knife")) or (back and back:FindFirstChild("Knife")) then return "Murderer" end
-    if (char and char:FindFirstChild("Gun")) or (back and back:FindFirstChild("Gun")) then return "Sheriff" end
-    return "Unknown"
-end
-
-local function IsPlayerInRound()
-    local character = LocalPlayer.Character
-    if not character or not character.Parent then return false end
-    local hum = character:FindFirstChildOfClass("Humanoid")
-    if not hum or hum.Health <= 0 then return false end
-    
-    local lobby = workspace:FindFirstChild("Lobby", true)
-    local root = character:FindFirstChild("HumanoidRootPart")
-    if lobby and root then
-        local lobbyPart = lobby:FindFirstChildWhichIsA("BasePart", true)
-        if lobbyPart and (root.Position - lobbyPart.Position).Magnitude < 80 then return false end
-    end
-    
-    local role = GetRole(LocalPlayer)
-    if role == "Innocent" or role == "Murderer" or role == "Sheriff" or role == "Hero" then return true end
-    
-    local map = workspace:FindFirstChild("Map") or workspace:FindFirstChild("CoinContainer", true)
-    if map then return false end
-    return false
-end
-
--- ========== LÓGICA DE COLETA ==========
-local function GetCoinContainer()
-    local map = workspace:FindFirstChild("Map")
-    if map then
-        local container = map:FindFirstChild("CoinContainer", true)
-        if container then return container end
-    end
-    return workspace:FindFirstChild("CoinContainer", true)
-end
-
-local function IsCoin(part)
-    if not part or not part.Parent then return false end
-    if not part:IsA("BasePart") then return false end
-    if part:GetAttribute("Collected") == true then return false end
-    if part == FarmTarget and (part.Transparency == 1 or part.Parent == nil) then return false end
-    if part:FindFirstChild("CoinVisual") then return true end
-    if part:FindFirstChild("Visual") then return true end
-    if part.Name:lower():find("coin") then return true end
-    return false
-end
-
-local function GetNearestCoin()
-    local char = LocalPlayer.Character
-    local root = char and char:FindFirstChild("HumanoidRootPart")
-    if not root then return nil end
-    local container = GetCoinContainer()
-    if not container then return nil end
-    local nearest = nil; local shortest = math.huge
-    for _, coin in ipairs(container:GetDescendants()) do
-        if IsCoin(coin) and coin ~= FarmTarget then
-            local dist = (coin.Position - root.Position).Magnitude
-            if dist < shortest then shortest = dist; nearest = coin end
-        end
-    end
-    return nearest
-end
-
-local function GetDangerousPlayers()
-    local char = LocalPlayer.Character
-    local root = char and char:FindFirstChild("HumanoidRootPart")
-    if not root then return {} end
-    local dangers = {}
-    for _, player in ipairs(Players:GetPlayers()) do
-        if player ~= LocalPlayer then
-            local enemyChar = player.Character
-            local enemyRoot = enemyChar and enemyChar:FindFirstChild("HumanoidRootPart")
-            if enemyRoot then
-                local role = GetRole(player)
-                if (Settings.AvoidMurderer and role == "Murderer") or (Settings.AvoidSheriff and role == "Sheriff") then
-                    table.insert(dangers, enemyRoot)
-                end
-            end
-        end
-    end
-    return dangers
-end
-
-local function GetSafeCoin()
-    local char = LocalPlayer.Character
-    local root = char and char:FindFirstChild("HumanoidRootPart")
-    if not root then return nil end
-    local dangers = GetDangerousPlayers()
-    local container = GetCoinContainer()
-    if not container then return nil end
-    if #dangers == 0 then return GetNearestCoin() end
-    
-    local nearestSafeCoin = nil; local shortestDist = math.huge; local radius = 30
-    for _, coin in ipairs(container:GetDescendants()) do
-        if IsCoin(coin) and coin ~= FarmTarget then
-            local distToPlayer = (coin.Position - root.Position).Magnitude
-            local isSafe = true
-            for _, dangerRoot in ipairs(dangers) do
-                if (coin.Position - dangerRoot.Position).Magnitude < radius then isSafe = false; break end
-            end
-            if isSafe and distToPlayer < shortestDist then shortestDist = distToPlayer; nearestSafeCoin = coin end
-        end
-    end
-    return nearestSafeCoin or GetNearestCoin()
-end
-
-local function IsBagFull()
-    if not BagCurrent or not BagMaximum then return false end
-    return BagCurrent >= BagMaximum and BagMaximum > 0
-end
-
--- ========== NOCLIP INTEGRADO ==========
-local function ApplyNoclip()
-    local char = LocalPlayer.Character
-    if not char then return end
-    
-    if not IsFarming then
-        -- Restaura a colisão de tudo que foi modificado
-        for part, orig in pairs(OriginalCollision) do 
-            if part and part.Parent then part.CanCollide = orig end 
-        end
-        table.clear(OriginalCollision)
-        return
-    end
-    
-    -- Aplica o noclip
-    for _, part in ipairs(char:GetDescendants()) do
-        if part:IsA("BasePart") then
-            if OriginalCollision[part] == nil then OriginalCollision[part] = part.CanCollide end
-            part.CanCollide = false
-        end
-    end
-end
-
-local function StopFarm()
-    IsFarming = false
-    if FarmConnection then FarmConnection:Disconnect(); FarmConnection = nil end
-    if FarmVelocity then FarmVelocity:Destroy(); FarmVelocity = nil end
-    if FarmAttachment then FarmAttachment:Destroy(); FarmAttachment = nil end
-    if NoclipConnection then NoclipConnection:Disconnect(); NoclipConnection = nil end
-    FarmTarget = nil
-    ApplyNoclip() -- Desativa o noclip
-end
-
-local function StartFarm()
-    if FarmConnection then return end
-    IsFarming = true
-    local char = LocalPlayer.Character
-    local root = char and char:FindFirstChild("HumanoidRootPart")
-    if not root then return end
-    
-    -- Ativa o Noclip loop
-    if NoclipConnection then NoclipConnection:Disconnect() end
-    NoclipConnection = RunService.Stepped:Connect(function()
-        if IsFarming then ApplyNoclip() end
-    end)
-
-    FarmAttachment = Instance.new("Attachment"); FarmAttachment.Parent = root
-    FarmVelocity = Instance.new("LinearVelocity")
-    FarmVelocity.Attachment0 = FarmAttachment; FarmVelocity.RelativeTo = Enum.ActuatorRelativeTo.World
-    FarmVelocity.VelocityConstraintMode = Enum.VelocityConstraintMode.Vector
-    FarmVelocity.ForceLimitsEnabled = false; FarmVelocity.VectorVelocity = Vector3.zero
-    FarmVelocity.Enabled = true; FarmVelocity.Parent = root
-
-    FarmConnection = RunService.Heartbeat:Connect(function()
-        if not IsFarming then StopFarm(); return end
-        if not root.Parent or not FarmVelocity.Parent then StopFarm(); return end
-        
-        local hum = char:FindFirstChildOfClass("Humanoid")
-        if not hum or hum.Health <= 0 then StopFarm(); return end
-        
-        if not IsPlayerInRound() then FarmVelocity.VectorVelocity = Vector3.zero; return end
-        if os.clock() < FarmCooldown then FarmVelocity.VectorVelocity = Vector3.zero; return end
-
-        if Settings.ResetWhenFull and IsBagFull() and not ResettingForFull then
-            ResettingForFull = true
-            StopFarm()
-            task.delay(0.5, function() hum.Health = 0 end)
-            return
-        end
-        if ResettingForFull then FarmVelocity.VectorVelocity = Vector3.zero; return end
-
-        if not FarmTarget or not IsCoin(FarmTarget) then FarmTarget = GetSafeCoin() end
-        if FarmTarget then
-            local dist = (FarmTarget.Position - root.Position).Magnitude
-            if dist <= 0.5 then 
-                FarmVelocity.VectorVelocity = Vector3.zero
-                FarmTarget = nil
-                task.wait(0.3)
-            else 
-                FarmVelocity.VectorVelocity = (FarmTarget.Position - root.Position).Unit * Settings.FarmSpeed 
-            end
-        else 
-            FarmVelocity.VectorVelocity = Vector3.zero 
-        end
-    end)
-end
-
-LocalPlayer.CharacterAdded:Connect(function(newChar)
-    if IsFarming then
-        StopFarm()
-        ResettingForFull = false
-        BagCurrent = nil; BagMaximum = nil
-        FarmCooldown = os.clock() + 3
-        task.wait(1.5)
-        if IsFarming then StartFarm() end
-    end
-end)
 
 -- ========== UTIL ==========
 local function Create(className, properties, parent)
@@ -350,7 +105,7 @@ end)
 Minimize.MouseButton1Click:Connect(function() Main.Visible = false; Floating.Visible = true end)
 Floating.MouseButton1Click:Connect(function() Main.Visible = true; Floating.Visible = false end)
 
-local function UnloadHub() ScreenGui:Destroy(); if LoaderGui then LoaderGui:Destroy() end; StopFarm(); print("[" .. HUB_NAME .. "] Hub desexecutado.") end
+local function UnloadHub() ScreenGui:Destroy(); if LoaderGui then LoaderGui:Destroy() end; print("[" .. HUB_NAME .. "] Hub desexecutado.") end
 local ClosePending = false; local CloseTimeout = nil
 CloseBtn.MouseButton1Click:Connect(function()
     if not ClosePending then
@@ -393,10 +148,10 @@ local function CreateTab(name, label)
 end
 
 local PlayerPage = CreatePage("PLAYER"); local CombatPage = CreatePage("COMBATE"); local TrollPage = CreatePage("TROLL")
-local TeleportPage = CreatePage("TELEPORTE"); local FarmPage = CreatePage("FARM"); local ConfigPage = CreatePage("CONFIGURACAO"); local AboutPage = CreatePage("ABOUT")
+local TeleportPage = CreatePage("TELEPORTE"); local ConfigPage = CreatePage("CONFIGURACAO"); local AboutPage = CreatePage("ABOUT")
 
 CreateTab("PLAYER", "👤  PLAYER"); CreateTab("COMBATE", "🎯  COMBATE"); CreateTab("TROLL", "😈  TROLL")
-CreateTab("TELEPORTE", "📍  TELEPORTE"); CreateTab("FARM", "💰  FARM"); CreateTab("CONFIGURACAO", "⚙  CONFIG"); CreateTab("ABOUT", "ℹ  ABOUT")
+CreateTab("TELEPORTE", "📍  TELEPORTE"); CreateTab("CONFIGURACAO", "⚙  CONFIG"); CreateTab("ABOUT", "ℹ  ABOUT")
 SelectPage("PLAYER")
 
 local ToggleButtons = {}; local SliderObjects = {}
@@ -448,81 +203,6 @@ local function AddSlider(page, title, setting, minimum, maximum, step)
 end
 
 -- ============================================================
--- ABA FARM
--- ============================================================
-local FarmStatus = Create("TextLabel", { Size = UDim2.new(1, 0, 0, 22), BackgroundTransparency = 1, Text = "Status: Desativado", TextColor3 = Theme.Text, TextSize = 12, Font = Enum.Font.GothamBold, TextXAlignment = Enum.TextXAlignment.Left }, FarmPage.Rows)
-FarmStatus.LayoutOrder = 1
-
-local function CreateFarmToggle(title, isActive, callback)
-    local row = Create("Frame", { Name = "FarmToggleRow", Size = UDim2.new(1, -6, 0, 34), BackgroundColor3 = Theme.Button, BorderSizePixel = 0 }, FarmPage.Rows)
-    Create("UICorner", { CornerRadius = UDim.new(0, 7) }, row)
-    Create("TextLabel", { Size = UDim2.new(1, -60, 1, 0), Position = UDim2.fromOffset(10, 0), BackgroundTransparency = 1, Text = title, TextColor3 = Theme.Text, TextSize = 11, Font = Enum.Font.GothamBold, TextXAlignment = Enum.TextXAlignment.Left }, row)
-    local track = Create("Frame", { Name = "ToggleTrack", Size = UDim2.fromOffset(36, 20), Position = UDim2.new(1, -46, 0.5, -10), BackgroundColor3 = isActive and Theme.Header or Theme.Track, BorderSizePixel = 0 }, row)
-    Create("UICorner", { CornerRadius = UDim.new(1, 0) }, track)
-    local knob = Create("Frame", { Name = "ToggleKnob", Size = UDim2.fromOffset(14, 14), Position = isActive and UDim2.new(1, -17, 0, 3) or UDim2.fromOffset(3, 3), BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0 }, track)
-    Create("UICorner", { CornerRadius = UDim.new(1, 0) }, knob)
-    local hitbox = Create("TextButton", { Name = "ToggleHitbox", Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, Text = "", AutoButtonColor = false }, row)
-    local function updateVisual(enabled) track.BackgroundColor3 = enabled and Theme.Header or Theme.Track; knob.Position = enabled and UDim2.new(1, -17, 0, 3) or UDim2.fromOffset(3, 3) end
-    hitbox.MouseButton1Click:Connect(function() local newState = not isActive; isActive = newState; updateVisual(newState); callback(newState) end)
-    return row, updateVisual
-end
-
-local AutoFarmToggle, UpdateAutoFarmVisual = CreateFarmToggle("Ativar Auto Farm", false, function(state)
-    if state then
-        StartFarm()
-        FarmStatus.Text = "Status: Ativado (Rodando)"
-        FarmStatus.TextColor3 = Color3.fromRGB(100, 255, 130)
-    else
-        StopFarm()
-        FarmStatus.Text = "Status: Desativado"
-        FarmStatus.TextColor3 = Theme.Text
-    end
-end)
-AutoFarmToggle.LayoutOrder = 2
-
-local FarmSpeedSlider = AddSlider(FarmPage.Rows, "Velocidade do Farm", "FarmSpeed", 5, 50, 1)
-FarmSpeedSlider.LayoutOrder = 3
-
-local AvoidMurdererToggle = CreateFarmToggle("Evitar Assassino", Settings.AvoidMurderer, function(state) Settings.AvoidMurderer = state end)
-AvoidMurdererToggle.LayoutOrder = 4
-
-local AvoidSheriffToggle = CreateFarmToggle("Evitar Xerife", Settings.AvoidSheriff, function(state) Settings.AvoidSheriff = state end)
-AvoidSheriffToggle.LayoutOrder = 5
-
-local AutoResetToggle = CreateFarmToggle("Auto Reset (Mochila Cheia)", Settings.ResetWhenFull, function(state) Settings.ResetWhenFull = state end)
-AutoResetToggle.LayoutOrder = 6
-
-local BagFrame = Create("Frame", { Name = "BagProgress", Size = UDim2.new(1, -6, 0, 58), BackgroundColor3 = Theme.Button, BorderSizePixel = 0, LayoutOrder = 7 }, FarmPage.Rows)
-Create("UICorner", { CornerRadius = UDim.new(0, 8) }, BagFrame)
-local BagTitle = Create("TextLabel", { Size = UDim2.new(1, -16, 0, 20), Position = UDim2.fromOffset(8, 3), BackgroundTransparency = 1, Text = "MOCHILA: aguardando dados...", TextColor3 = Theme.Text, TextSize = 12, Font = Enum.Font.GothamBold, TextXAlignment = Enum.TextXAlignment.Left }, BagFrame)
-local BagBackground = Create("Frame", { Size = UDim2.new(1, -16, 0, 14), Position = UDim2.fromOffset(8, 30), BackgroundColor3 = Theme.Track, BorderSizePixel = 0 }, BagFrame)
-Create("UICorner", { CornerRadius = UDim.new(1, 0) }, BagBackground)
-local BagFill = Create("Frame", { Size = UDim2.new(0, 0, 1, 0), BackgroundColor3 = Color3.fromRGB(100, 255, 130), BorderSizePixel = 0 }, BagBackground)
-Create("UICorner", { CornerRadius = UDim.new(1, 0) }, BagFill)
-
-local function UpdateBagDisplay()
-    if not BagCurrent or not BagMaximum or BagMaximum <= 0 then
-        BagTitle.Text = "MOCHILA: aguardando dados..."; BagFill.Size = UDim2.new(0, 0, 1, 0); BagFill.BackgroundColor3 = Color3.fromRGB(255, 220, 80); return
-    end
-    local percent = math.clamp(BagCurrent / BagMaximum, 0, 1)
-    BagTitle.Text = string.format("MOCHILA: %d/%d (%d%%)", BagCurrent, BagMaximum, math.floor(percent * 100))
-    BagFill.Size = UDim2.new(percent, 0, 1, 0)
-    if percent >= 1 then BagFill.BackgroundColor3 = Color3.fromRGB(255, 45, 65)
-    elseif percent >= 0.75 then BagFill.BackgroundColor3 = Color3.fromRGB(255, 170, 50)
-    else BagFill.BackgroundColor3 = Color3.fromRGB(100, 255, 130) end
-end
-
-if CoinCollected and CoinCollected:IsA("RemoteEvent") then
-    CoinCollected.OnClientEvent:Connect(function(_, current, maximum)
-        current = tonumber(current); maximum = tonumber(maximum)
-        if current and maximum and maximum > 0 then
-            BagCurrent = current; BagMaximum = maximum
-            UpdateBagDisplay()
-        end
-    end)
-end
-
--- ============================================================
 -- ABA ABOUT
 -- ============================================================
 local AboutRow = Create("Frame", { Size = UDim2.new(1, -12, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1 }, AboutPage.Rows)
@@ -548,11 +228,10 @@ ApplyTheme = function(name)
             if object:IsA("UIStroke") then object.Color = theme.Accent end
             if object:IsA("TextButton") then if object.BackgroundTransparency < 1 then object.BackgroundColor3 = theme.Button end; object.TextColor3 = theme.Text
             elseif object:IsA("TextBox") then object.BackgroundColor3 = theme.Button; object.TextColor3 = theme.Text
-            elseif object:IsA("Frame") and (object.Name == "SliderContainer" or object.Name == "ToggleContainer" or object.Name == "FarmToggleRow" or object.Name == "BagProgress") then object.BackgroundColor3 = theme.Button
+            elseif object:IsA("Frame") and (object.Name == "SliderContainer" or object.Name == "ToggleContainer") then object.BackgroundColor3 = theme.Button
             elseif object:IsA("TextLabel") then if object.TextColor3 ~= Color3.fromRGB(255, 90, 130) then object.TextColor3 = theme.Text end end
         end
     end
-    if BagFrame then BagFrame.BackgroundColor3 = theme.Button end; if BagBackground then BagBackground.BackgroundColor3 = theme.Track end
     if AboutLeft then AboutLeft.BackgroundColor3 = theme.Button end; if AboutStroke then AboutStroke.Color = theme.Accent end
     if AboutTitle then AboutTitle.TextColor3 = theme.Text end; if AboutVersion then AboutVersion.TextColor3 = theme.Accent end
     if ThemeSelector then ThemeSelector.Text = "Tema: " .. name .. "  ▼" end
@@ -584,7 +263,7 @@ local function ConfigPath(name) return SaveFolder .. "/" .. name .. ".json" end
 local function SetSaveStatus(message) if SaveStatus and SaveStatus.Parent then SaveStatus.Text = "Status: " .. message end end
 local function MakeSnapshot() local data = { Version = 1, Theme = CurrentTheme, Settings = {} }; for key, value in pairs(Settings) do if type(value) == "boolean" or type(value) == "number" then data.Settings[key] = value end end; return data end
 local function SaveConfig(name) local ok, err = EnsureSaveFolder(); if not ok then SetSaveStatus(err); return false end; name = CleanConfigName(name); if not name then SetSaveStatus("Digite um nome valido."); return false end; local encodedOk, contents = pcall(function() return HttpService:JSONEncode(MakeSnapshot()) end); if not encodedOk then SetSaveStatus("Erro ao preparar configuracao."); return false end; local writeOk, writeErr = pcall(writefile, ConfigPath(name), contents); if not writeOk then SetSaveStatus("Falha ao salvar: " .. tostring(writeErr)); return false end; SelectedConfig = name; SetSaveStatus("Configuracao '" .. name .. "' salva!"); return true end
-local function LoadConfig(name) local ok, err = EnsureSaveFolder(); if not ok then SetSaveStatus(err); return false end; name = CleanConfigName(name); if not name or not isfile(ConfigPath(name)) then SetSaveStatus("Configuracao nao encontrada."); return false end; local readOk, contents = pcall(readfile, ConfigPath(name)); if not readOk then SetSaveStatus("Nao foi possivel ler o arquivo."); return false end; local decodeOk, data = pcall(function() return HttpService:JSONDecode(contents) end); if not decodeOk or type(data) ~= "table" or type(data.Settings) ~= "table" then SetSaveStatus("Arquivo de configuracao invalido."); return false end; for _, slider in ipairs(SliderObjects) do local value = data.Settings[slider.Setting]; if type(value) == "number" then slider.Set(value) end end; for key, item in pairs(ToggleButtons) do if Settings[key] == true and item.Callback then pcall(item.Callback, false) end; Settings[key] = false; item.Update(false) end; local order = { "AvoidMurderer", "AvoidSheriff", "ResetWhenFull" }; for _, key in ipairs(order) do local item = ToggleButtons[key]; local value = data.Settings[key]; if item and type(value) == "boolean" then Settings[key] = value; item.Update(value); if item.Callback then pcall(item.Callback, value) end end end; if type(data.Theme) == "string" and Themes[data.Theme] then ApplyTheme(data.Theme) end; SelectedConfig = name; SetSaveStatus("'" .. name .. "' carregada!"); return true end
+local function LoadConfig(name) local ok, err = EnsureSaveFolder(); if not ok then SetSaveStatus(err); return false end; name = CleanConfigName(name); if not name or not isfile(ConfigPath(name)) then SetSaveStatus("Configuracao nao encontrada."); return false end; local readOk, contents = pcall(readfile, ConfigPath(name)); if not readOk then SetSaveStatus("Nao foi possivel ler o arquivo."); return false end; local decodeOk, data = pcall(function() return HttpService:JSONDecode(contents) end); if not decodeOk or type(data) ~= "table" or type(data.Settings) ~= "table" then SetSaveStatus("Arquivo de configuracao invalido."); return false end; for _, slider in ipairs(SliderObjects) do local value = data.Settings[slider.Setting]; if type(value) == "number" then slider.Set(value) end end; for key, item in pairs(ToggleButtons) do if Settings[key] == true and item.Callback then pcall(item.Callback, false) end; Settings[key] = false; item.Update(false) end; if type(data.Theme) == "string" and Themes[data.Theme] then ApplyTheme(data.Theme) end; SelectedConfig = name; SetSaveStatus("'" .. name .. "' carregada!"); return true end
 local function RefreshConfigs() local ok, err = EnsureSaveFolder(); if not ok then SetSaveStatus(err); return end; if ConfigList then for _, child in ipairs(ConfigList:GetChildren()) do if child:IsA("TextButton") then child:Destroy() end end end; local found = {}; local listOk, files = pcall(listfiles, SaveFolder); if listOk and type(files) == "table" then for _, path in ipairs(files) do local base = tostring(path):match("([^/\\]+)%.json$"); if base then table.insert(found, base) end end end; table.sort(found); for i, name in ipairs(found) do local entry = AddButton(ConfigList, name, function() SelectedConfig = name; ConfigNameBox.Text = name; ConfigListBtn.Text = "Salvo: " .. name .. "  ▼"; ConfigList.Visible = false; SetSaveStatus("Selecionada: " .. name) end); entry.Size = UDim2.new(1, 0, 0, 27); entry.LayoutOrder = i end; SetSaveStatus(#found .. " configuracao(oes) encontrada(s).") end
 
 Create("TextLabel", { Size = UDim2.new(1, 0, 0, 22), BackgroundTransparency = 1, Text = "💾 SALVAMENTO", TextColor3 = Theme.Text, TextSize = 12, Font = Enum.Font.GothamBold, TextXAlignment = Enum.TextXAlignment.Left }, ConfigRows)
