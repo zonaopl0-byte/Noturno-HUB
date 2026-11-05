@@ -1,11 +1,11 @@
 --[[
-    NOTURNO HUB - v0.5.7
-    - FIX: AutoFarm não farma mais na entrada atrasada (aguarda a próxima rodada).
-    - Adicionada verificação de função (Role) antes de mover o personagem.
+    NOTURNO HUB - v0.5.8
+    - AutoFarm ativa o Noclip automaticamente enquanto estiver ligado.
+    - Noclip é desativado ao parar o farm ou ao morrer.
 ]]
 
 local HUB_NAME = "NOTURNO HUB"
-local HUB_VERSION = "0.5.7"
+local HUB_VERSION = "0.5.8"
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -51,16 +51,14 @@ local BagCurrent = nil
 local BagMaximum = nil
 local OriginalCollision = {}
 local FarmCooldown = 0
-
--- Variáveis de controle de rodada
-local RoundActive = false
-local RoleCache = {}
+local NoclipConnection = nil
 
 -- ========== VERIFICAÇÃO DE FUNÇÃO (ROLE) ==========
 local Remotes = ReplicatedStorage:FindFirstChild("Remotes")
 local Gameplay = Remotes and Remotes:FindFirstChild("Gameplay")
 local RoleRemote = Gameplay and Gameplay:FindFirstChild("GetCurrentPlayerData")
 local CoinCollected = Gameplay and Gameplay:FindFirstChild("CoinCollected")
+local RoleCache = {}
 
 local function RefreshRoles()
     if not RoleRemote then return end
@@ -76,7 +74,6 @@ local function GetRole(player)
         if entry.Dead == true then return "Dead" end
         if entry.Role then return entry.Role end
     end
-    -- Se tem faca, é assassino
     local char = player.Character
     local back = player.Backpack
     if (char and char:FindFirstChild("Knife")) or (back and back:FindFirstChild("Knife")) then return "Murderer" end
@@ -90,26 +87,18 @@ local function IsPlayerInRound()
     local hum = character:FindFirstChildOfClass("Humanoid")
     if not hum or hum.Health <= 0 then return false end
     
-    -- Verifica se está no lobby
     local lobby = workspace:FindFirstChild("Lobby", true)
     local root = character:FindFirstChild("HumanoidRootPart")
     if lobby and root then
         local lobbyPart = lobby:FindFirstChildWhichIsA("BasePart", true)
-        if lobbyPart and (root.Position - lobbyPart.Position).Magnitude < 80 then
-            return false -- Está no lobby
-        end
+        if lobbyPart and (root.Position - lobbyPart.Position).Magnitude < 80 then return false end
     end
     
-    -- Verifica se tem uma função ativa
     local role = GetRole(LocalPlayer)
-    if role == "Innocent" or role == "Murderer" or role == "Sheriff" or role == "Hero" then
-        return true
-    end
+    if role == "Innocent" or role == "Murderer" or role == "Sheriff" or role == "Hero" then return true end
     
-    -- Se o mapa carregou mas não tem função = Entrada atrasada
     local map = workspace:FindFirstChild("Map") or workspace:FindFirstChild("CoinContainer", true)
-    if map then return false end -- Entrada atrasada
-    
+    if map then return false end
     return false
 end
 
@@ -177,13 +166,9 @@ local function GetSafeCoin()
     local dangers = GetDangerousPlayers()
     local container = GetCoinContainer()
     if not container then return nil end
-    
     if #dangers == 0 then return GetNearestCoin() end
     
-    local nearestSafeCoin = nil
-    local shortestDist = math.huge
-    local radius = 30
-    
+    local nearestSafeCoin = nil; local shortestDist = math.huge; local radius = 30
     for _, coin in ipairs(container:GetDescendants()) do
         if IsCoin(coin) and coin ~= FarmTarget then
             local distToPlayer = (coin.Position - root.Position).Magnitude
@@ -191,10 +176,7 @@ local function GetSafeCoin()
             for _, dangerRoot in ipairs(dangers) do
                 if (coin.Position - dangerRoot.Position).Magnitude < radius then isSafe = false; break end
             end
-            if isSafe and distToPlayer < shortestDist then
-                shortestDist = distToPlayer
-                nearestSafeCoin = coin
-            end
+            if isSafe and distToPlayer < shortestDist then shortestDist = distToPlayer; nearestSafeCoin = coin end
         end
     end
     return nearestSafeCoin or GetNearestCoin()
@@ -205,14 +187,21 @@ local function IsBagFull()
     return BagCurrent >= BagMaximum and BagMaximum > 0
 end
 
+-- ========== NOCLIP INTEGRADO ==========
 local function ApplyNoclip()
     local char = LocalPlayer.Character
     if not char then return end
+    
     if not IsFarming then
-        for part, orig in pairs(OriginalCollision) do if part and part.Parent then part.CanCollide = orig end end
+        -- Restaura a colisão de tudo que foi modificado
+        for part, orig in pairs(OriginalCollision) do 
+            if part and part.Parent then part.CanCollide = orig end 
+        end
         table.clear(OriginalCollision)
         return
     end
+    
+    -- Aplica o noclip
     for _, part in ipairs(char:GetDescendants()) do
         if part:IsA("BasePart") then
             if OriginalCollision[part] == nil then OriginalCollision[part] = part.CanCollide end
@@ -222,21 +211,26 @@ local function ApplyNoclip()
 end
 
 local function StopFarm()
+    IsFarming = false
     if FarmConnection then FarmConnection:Disconnect(); FarmConnection = nil end
     if FarmVelocity then FarmVelocity:Destroy(); FarmVelocity = nil end
     if FarmAttachment then FarmAttachment:Destroy(); FarmAttachment = nil end
+    if NoclipConnection then NoclipConnection:Disconnect(); NoclipConnection = nil end
     FarmTarget = nil
-    ApplyNoclip()
+    ApplyNoclip() -- Desativa o noclip
 end
 
 local function StartFarm()
     if FarmConnection then return end
+    IsFarming = true
     local char = LocalPlayer.Character
     local root = char and char:FindFirstChild("HumanoidRootPart")
     if not root then return end
     
-    task.spawn(function()
-        while IsFarming do ApplyNoclip(); task.wait(0.1) end
+    -- Ativa o Noclip loop
+    if NoclipConnection then NoclipConnection:Disconnect() end
+    NoclipConnection = RunService.Stepped:Connect(function()
+        if IsFarming then ApplyNoclip() end
     end)
 
     FarmAttachment = Instance.new("Attachment"); FarmAttachment.Parent = root
@@ -253,12 +247,7 @@ local function StartFarm()
         local hum = char:FindFirstChildOfClass("Humanoid")
         if not hum or hum.Health <= 0 then StopFarm(); return end
         
-        -- AQUI ESTÁ A PROTEÇÃO PARA ENTRADA ATRASADA
-        if not IsPlayerInRound() then
-            FarmVelocity.VectorVelocity = Vector3.zero
-            return
-        end
-        
+        if not IsPlayerInRound() then FarmVelocity.VectorVelocity = Vector3.zero; return end
         if os.clock() < FarmCooldown then FarmVelocity.VectorVelocity = Vector3.zero; return end
 
         if Settings.ResetWhenFull and IsBagFull() and not ResettingForFull then
@@ -289,8 +278,7 @@ LocalPlayer.CharacterAdded:Connect(function(newChar)
     if IsFarming then
         StopFarm()
         ResettingForFull = false
-        BagCurrent = nil
-        BagMaximum = nil
+        BagCurrent = nil; BagMaximum = nil
         FarmCooldown = os.clock() + 3
         task.wait(1.5)
         if IsFarming then StartFarm() end
@@ -480,7 +468,6 @@ local function CreateFarmToggle(title, isActive, callback)
 end
 
 local AutoFarmToggle, UpdateAutoFarmVisual = CreateFarmToggle("Ativar Auto Farm", false, function(state)
-    IsFarming = state
     if state then
         StartFarm()
         FarmStatus.Text = "Status: Ativado (Rodando)"
