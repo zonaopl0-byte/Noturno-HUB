@@ -1,8 +1,6 @@
 --[[
     NOTURNO HUB - v0.3.9
-    - Adicionada Tela de Carregamento com Perfil (adaptada do Hello Kitty Hub).
-    - Fundo escuro (Noturno), perfil do criador e barra de progresso.
-    - Painel só aparece depois que a tela some.
+    - Removido o cartão de perfil (criador) da tela de carregamento.
     - Versionamento SemVer: 0.0.9 -> 0.1.0 -> 0.1.9 -> 0.2.0 -> 0.3.0
 ]]
 
@@ -17,10 +15,7 @@ local TweenService = game:GetService("TweenService")
 local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 
--- ========== CONFIGURAÇÕES DO PERFIL ==========
-local PROFILE_USER_ID = 493241893
-local PROFILE_USERNAME = "Guilherme_FOX123"
-local PROFILE_DISPLAYNAME = "OGuizin"
+-- ========== CONFIGURAÇÕES DO LOADING ==========
 local DURACAO = 5
 local FADE = 0.5
 
@@ -123,6 +118,8 @@ end
 
 local old = PlayerGui:FindFirstChild("NoturnoHub")
 if old then old:Destroy() end
+local oldLoader = PlayerGui:FindFirstChild("NoturnoLoader")
+if oldLoader then oldLoader:Destroy() end
 
 -- ============================================================
 -- 1. TELA DE CARREGAMENTO (SOBREPÕE TUDO)
@@ -131,30 +128,30 @@ local LoaderGui = Create("ScreenGui", {
     Name = "NoturnoLoader",
     ResetOnSpawn = false,
     IgnoreGuiInset = true,
-    DisplayOrder = 999, -- Fica por cima de tudo
+    DisplayOrder = 999,
     ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 }, PlayerGui)
 
 local bg = Create("Frame", {
     Name = "BG",
     Size = UDim2.fromScale(1, 1),
-    BackgroundColor3 = Color3.fromRGB(15, 10, 20), -- Fundo escuro
+    BackgroundColor3 = Color3.fromRGB(15, 10, 20),
     BorderSizePixel = 0
 }, LoaderGui)
 
 local titulo = Create("TextLabel", {
     Size = UDim2.new(1, 0, 0, 60),
-    Position = UDim2.new(0, 0, 0.5, -150),
+    Position = UDim2.new(0, 0, 0.5, -50),
     BackgroundTransparency = 1,
     Text = "🌙 " .. HUB_NAME,
-    TextColor3 = Color3.fromRGB(160, 120, 255), -- Roxo
+    TextColor3 = Color3.fromRGB(160, 120, 255),
     TextSize = 36,
     Font = Enum.Font.GothamBold
 }, bg)
 
 local sub = Create("TextLabel", {
     Size = UDim2.new(1, 0, 0, 30),
-    Position = UDim2.new(0, 0, 0.5, -90),
+    Position = UDim2.new(0, 0, 0.5, 10),
     BackgroundTransparency = 1,
     Text = "Carregando...",
     TextColor3 = Color3.fromRGB(235, 225, 255),
@@ -162,72 +159,10 @@ local sub = Create("TextLabel", {
     Font = Enum.Font.Gotham
 }, bg)
 
--- ========== CARTÃO DE PERFIL ==========
-local profileFrame = Create("Frame", {
-    Size = UDim2.new(0, 260, 0, 80),
-    Position = UDim2.new(0.5, -130, 0.5, -20),
-    BackgroundColor3 = Color3.fromRGB(48, 36, 72),
-    BackgroundTransparency = 0.2,
-    BorderSizePixel = 0
-}, bg)
-Create("UICorner", { CornerRadius = UDim.new(0, 10) }, profileFrame)
-
-local pImage = Create("ImageLabel", {
-    Size = UDim2.new(0, 44, 0, 44),
-    Position = UDim2.new(0, 8, 0, 8),
-    BackgroundColor3 = Color3.fromRGB(255, 255, 255),
-    BackgroundTransparency = 0.5,
-    Image = "rbxassetid://0"
-}, profileFrame)
-Create("UICorner", { CornerRadius = UDim.new(0, 8) }, pImage)
-
-local pDisplay = Create("TextLabel", {
-    Size = UDim2.new(1, -60, 0, 20),
-    Position = UDim2.new(0, 60, 0, 8),
-    BackgroundTransparency = 1,
-    Text = PROFILE_DISPLAYNAME,
-    TextColor3 = Color3.new(1, 1, 1),
-    TextSize = 14,
-    Font = Enum.Font.GothamBold,
-    TextXAlignment = Enum.TextXAlignment.Left
-}, profileFrame)
-
-local pUser = Create("TextLabel", {
-    Size = UDim2.new(1, -60, 0, 15),
-    Position = UDim2.new(0, 60, 0, 28),
-    BackgroundTransparency = 1,
-    Text = "@" .. PROFILE_USERNAME,
-    TextColor3 = Color3.fromRGB(235, 225, 255),
-    TextSize = 11,
-    Font = Enum.Font.Gotham,
-    TextXAlignment = Enum.TextXAlignment.Left
-}, profileFrame)
-
-local pRole = Create("TextLabel", {
-    Size = UDim2.new(1, -60, 0, 15),
-    Position = UDim2.new(0, 60, 0, 45),
-    BackgroundTransparency = 1,
-    Text = "Criador",
-    TextColor3 = Color3.fromRGB(160, 120, 255),
-    TextSize = 11,
-    Font = Enum.Font.GothamBold,
-    TextXAlignment = Enum.TextXAlignment.Left
-}, profileFrame)
-
--- Puxar a foto do avatar
-task.spawn(function()
-    local success, imageUrl = pcall(function()
-        return Players:GetUserThumbnailAsync(PROFILE_USER_ID, Enum.ThumbnailType.HeadShot, Enum.ThumbnailSize.Size150x150)
-    end)
-    if success and imageUrl then
-        pImage.Image = imageUrl
-    end
-end)
-
 -- ========== BARRA DE PROGRESSO ==========
 local barBg = Create("Frame", {
     Size = UDim2.new(0, 300, 0, 12),
-    Position = UDim2.new(0.5, -150, 0.5, 80),
+    Position = UDim2.new(0.5, -150, 0.5, 60),
     BackgroundColor3 = Color3.fromRGB(48, 36, 72),
     BorderSizePixel = 0
 }, bg)
@@ -263,7 +198,7 @@ local Main = Create("Frame", {
     BackgroundColor3 = Theme.Main,
     BorderSizePixel = 0,
     Active = true,
-    Visible = false, -- Fica invisível até a tela de carregamento sumir
+    Visible = false,
     ZIndex = 1
 }, ScreenGui)
 Create("UISizeConstraint", { MinSize = Vector2.new(320, 350), MaxSize = Vector2.new(600, 520) }, Main)
@@ -312,7 +247,7 @@ Floating.MouseButton1Click:Connect(function() Main.Visible = true; Floating.Visi
 -- ========== DESEXECUTAR (X) ==========
 local ClosePending = false
 local CloseTimeout = nil
-local function UnloadHub() ScreenGui:Destroy(); LoaderGui:Destroy(); print("[" .. HUB_NAME .. "] Hub desexecutado.") end
+local function UnloadHub() ScreenGui:Destroy(); if LoaderGui then LoaderGui:Destroy() end; print("[" .. HUB_NAME .. "] Hub desexecutado.") end
 CloseBtn.MouseButton1Click:Connect(function()
     if not ClosePending then
         ClosePending = true; CloseBtn.Text = "?"; CloseBtn.BackgroundColor3 = Color3.fromRGB(120, 25, 55)
@@ -523,7 +458,7 @@ local function LoadConfig(name)
     if not readOk then SetSaveStatus("Nao foi possivel ler o arquivo."); return false end
     local decodeOk, data = pcall(function() return HttpService:JSONDecode(contents) end)
     if not decodeOk or type(data) ~= "table" or type(data.Settings) ~= "table" then SetSaveStatus("Arquivo de configuracao invalido."); return false end
-    
+
     for _, slider in ipairs(SliderObjects) do
         local value = data.Settings[slider.Setting]
         if type(value) == "number" then slider.Set(value) end
@@ -624,11 +559,6 @@ TweenService:Create(titulo, TweenInfo.new(FADE), { TextTransparency = 1 }):Play(
 TweenService:Create(sub, TweenInfo.new(FADE), { TextTransparency = 1 }):Play()
 TweenService:Create(barBg, TweenInfo.new(FADE), { BackgroundTransparency = 1 }):Play()
 TweenService:Create(barFill, TweenInfo.new(FADE), { BackgroundTransparency = 1 }):Play()
-TweenService:Create(profileFrame, TweenInfo.new(FADE), { BackgroundTransparency = 1 }):Play()
-TweenService:Create(pDisplay, TweenInfo.new(FADE), { TextTransparency = 1 }):Play()
-TweenService:Create(pUser, TweenInfo.new(FADE), { TextTransparency = 1 }):Play()
-TweenService:Create(pRole, TweenInfo.new(FADE), { TextTransparency = 1 }):Play()
-TweenService:Create(pImage, TweenInfo.new(FADE), { ImageTransparency = 1 }):Play()
 fadeTween:Play()
 fadeTween.Completed:Wait()
 
