@@ -1,15 +1,19 @@
 --[[
     NOTURNO HUB - PAINEL PRINCIPAL
-    Versão: 0.9.6
+    Versão: 0.9.7
 
-    Alterações:
-    - ESP Player atualiza visualmente a cada 0.5s (era 3s)
-    - Fetch de roles continua protegido por 3s (evita rate-limit/kick)
-    - GetRole volta a retornar "Unknown" como padrão
+    Alterações v0.9.7:
+    - Fix typo FullbrightOriginal
+    - Toggles seguem o tema em tempo real
+    - ToggleTrack/Knob reaplicam cor ao trocar tema
+    - RoundStart não zera mais FullbrightOriginal
+    - DefaultWalkSpeed/JumpPower capturados do personagem real
+    - FloatingButton arrastável
+    - Stepped loops guardados e desconectados no Unload
 ]]
 
 local HUB_NAME = "NOTURNO HUB"
-local HUB_VERSION = "0.9.6"
+local HUB_VERSION = "0.9.7"
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -58,6 +62,9 @@ local AntiFlingConnection, AntiAfkConnection, InfJumpConnection
 local OriginalCollision = {}
 local InfJumpCount = 0
 local LastJumpTime = 0
+
+-- Loops guardados (para desconectar no Unload)
+local SteppedConnections = {}
 
 -- X-Ray e Fullbright
 local XRayOriginal = {}
@@ -158,7 +165,7 @@ local CoinCounterText = Create("TextLabel", {
     TextXAlignment = Enum.TextXAlignment.Center
 }, CoinCounterFrame)
 
--- ========== ARRASTAR ==========
+-- ========== ARRASTAR MAIN ==========
 local dragging, dragStart, startPos = false,nil,nil
 DragBlock.InputBegan:Connect(function(input)
     if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
@@ -174,6 +181,25 @@ UserInputService.InputChanged:Connect(function(input)
     if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
         local delta = input.Position - dragStart
         Main.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+    end
+end)
+
+-- ========== ARRASTAR FLOATING ==========
+local floatingDragging, floatingStart, floatingStartPos = false, nil, nil
+Floating.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        floatingDragging = true; floatingStart = input.Position; floatingStartPos = Floating.Position
+    end
+end)
+Floating.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        floatingDragging = false
+    end
+end)
+UserInputService.InputChanged:Connect(function(input)
+    if floatingDragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+        local delta = input.Position - floatingStart
+        Floating.Position = UDim2.new(floatingStartPos.X.Scale, floatingStartPos.X.Offset + delta.X, floatingStartPos.Y.Scale, floatingStartPos.Y.Offset + delta.Y)
     end
 end)
 
@@ -309,7 +335,6 @@ local function CreateESP(player)
     }
 end
 
--- UpdateESP só mexe no visual (rápido) — fetch é feito à parte
 local function UpdateESP()
     if not Settings.ESP_Players then return end
     for _,player in ipairs(Players:GetPlayers()) do
@@ -493,7 +518,6 @@ end
 -- ============================================================
 -- X-RAY
 -- ============================================================
-
 local function IsPlayerCharacterPart(part)
     for _, player in ipairs(Players:GetPlayers()) do
         local character = player.Character
@@ -549,7 +573,6 @@ end
 -- ============================================================
 -- FULLBRIGHT
 -- ============================================================
-
 local function EnableFullbright(state)
     Settings.Fullbright = state
 
@@ -573,7 +596,7 @@ local function EnableFullbright(state)
         Lighting.ExposureCompensation = 0.3
     else
         if FullbrightOriginal then
-            for property, value in pairs(FulbrightOriginal) do
+            for property, value in pairs(FullbrightOriginal) do  -- ✅ typo corrigido
                 Lighting[property] = value
             end
             FullbrightOriginal = nil
@@ -584,6 +607,7 @@ end
 -- ============================================================
 -- TELEPORTE (MM2)
 -- ============================================================
+local TeleportStatus
 
 local function SetTPStatus(msg)
     if TeleportStatus and TeleportStatus.Parent then
@@ -807,7 +831,6 @@ end
 -- ============================================================
 -- UNLOAD
 -- ============================================================
-
 local function UnloadHub()
     Settings.FlyEnabled = false
     if FlyConnection then FlyConnection:Disconnect(); FlyConnection = nil end
@@ -826,6 +849,12 @@ local function UnloadHub()
     if AntiAfkConnection then AntiAfkConnection:Disconnect(); AntiAfkConnection = nil end
     Settings.InfJump = false
     if InfJumpConnection then InfJumpConnection:Disconnect(); InfJumpConnection = nil end
+
+    -- Desconecta loops Stepped guardados
+    for _, conn in ipairs(SteppedConnections) do
+        if conn then pcall(function() conn:Disconnect() end) end
+    end
+    table.clear(SteppedConnections)
 
     EnableXRay(false)
     EnableFullbright(false)
@@ -871,7 +900,6 @@ end)
 -- ============================================================
 -- ABAS
 -- ============================================================
-
 local Sidebar = Create("ScrollingFrame", { Name = "Sidebar", Size = UDim2.new(0,160,1,-78), Position = UDim2.fromOffset(8,70), BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 3, AutomaticCanvasSize = Enum.AutomaticSize.Y, ScrollBarImageColor3 = Theme.Accent, ZIndex = 2 }, Main)
 Create("UIListLayout", { Padding = UDim.new(0,8), SortOrder = Enum.SortOrder.LayoutOrder }, Sidebar)
 local PagesContainer = Create("Frame", { Name = "PagesContainer", Size = UDim2.new(1,-182,1,-80), Position = UDim2.fromOffset(174,70), BackgroundTransparency = 1, ZIndex = 2 }, Main)
@@ -927,7 +955,6 @@ SelectPage("PLAYER")
 -- ============================================================
 -- BOTÕES E SLIDERS
 -- ============================================================
-
 local SliderObjects = {}
 
 ResetAllToggles = function()
@@ -989,6 +1016,7 @@ local function AddSlider(page,title,setting,minimum,maximum,step)
     return frame
 end
 
+-- ✅ CreateCustomToggle atualizado: usa Theme em tempo real
 local function CreateCustomToggle(page, title, setting, callback)
     local row = Create("Frame", { Name = "FarmToggleRow", Size = UDim2.new(1,-6,0,34), BackgroundColor3 = Theme.Button, BorderSizePixel = 0 }, page.Rows)
     Create("UICorner", { CornerRadius = UDim.new(0,7) }, row)
@@ -999,6 +1027,7 @@ local function CreateCustomToggle(page, title, setting, callback)
     Create("UICorner", { CornerRadius = UDim.new(1,0) }, knob)
     local hitbox = Create("TextButton", { Name = "ToggleHitbox", Size = UDim2.new(1,0,1,0), BackgroundTransparency = 1, Text = "", AutoButtonColor = false }, row)
     local function updateVisual(enabled)
+        -- ✅ usa Theme global (atualizado pelo ApplyTheme)
         track.BackgroundColor3 = enabled and Theme.Header or Theme.Track
         knob.Position = enabled and UDim2.new(1,-17,0,3) or UDim2.fromOffset(3,3)
     end
@@ -1013,7 +1042,6 @@ local function CreateCustomToggle(page, title, setting, callback)
 end
 
 -- ========== ABA PLAYER ==========
-
 CreateCustomToggle(PlayerPage, "Noclip","Noclip",function(state)
     if not state then
         for part,orig in pairs(OriginalCollision) do
@@ -1050,8 +1078,18 @@ CreateCustomToggle(PlayerPage, "Anti-AFK","AntiAfk",function(state)
     end
 end)
 
+-- ✅ Defaults dinâmicos (capturados do personagem real)
 local DefaultWalkSpeed = 16
 local DefaultJumpPower = 50
+task.spawn(function()
+    local char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+    local hum = char:WaitForChild("Humanoid", 5)
+    if hum then
+        task.wait(0.5)
+        DefaultWalkSpeed = hum.WalkSpeed
+        DefaultJumpPower = hum.JumpPower
+    end
+end)
 
 CreateCustomToggle(PlayerPage, "Ativar WalkSpeed","WalkSpeedEnabled",function(state)
     local char = LocalPlayer.Character
@@ -1146,7 +1184,8 @@ end).LayoutOrder = 10
 local LimitInfJumpToggle = CreateCustomToggle(PlayerPage, "Limitar Inf Jump (2x)","LimitInfJump",function(state) end)
 LimitInfJumpToggle.LayoutOrder = 11
 
-RunService.Stepped:Connect(function()
+-- ✅ Loops Stepped guardados
+table.insert(SteppedConnections, RunService.Stepped:Connect(function()
     local char = LocalPlayer.Character
     local hum = char and char:FindFirstChildOfClass("Humanoid")
     if hum then
@@ -1155,9 +1194,9 @@ RunService.Stepped:Connect(function()
             InfJumpCount = 0
         end
     end
-end)
+end))
 
-RunService.Stepped:Connect(function()
+table.insert(SteppedConnections, RunService.Stepped:Connect(function()
     local char = LocalPlayer.Character
     local hum = char and char:FindFirstChildOfClass("Humanoid")
     if hum then
@@ -1175,12 +1214,11 @@ RunService.Stepped:Connect(function()
             end
         end
     end
-end)
+end))
 
 -- ============================================================
 -- ABA VISUALS
 -- ============================================================
-
 CreateCustomToggle(VisualsPage, "ESP Player","ESP_Players",function(state) EnableESP(state) end)
 CreateCustomToggle(VisualsPage, "ESP Gun","ESP_Gun",function(state) EnableGunESP(state) end)
 CreateCustomToggle(VisualsPage, "ESP Coin","ESP_Coin",function(state) EnableCoinESP(state) end)
@@ -1190,8 +1228,7 @@ CreateCustomToggle(VisualsPage, "FullBright","Fullbright",function(state) Enable
 -- ============================================================
 -- ABA TELEPORTE
 -- ============================================================
-
-local TeleportStatus = Create("TextLabel", {
+TeleportStatus = Create("TextLabel", {
     Size = UDim2.new(1,-6,0,34),
     BackgroundTransparency = 1,
     Text = "Status: Pronto.",
@@ -1202,7 +1239,7 @@ local TeleportStatus = Create("TextLabel", {
     TextXAlignment = Enum.TextXAlignment.Left
 }, TeleportPage.Rows)
 
-local PlayerSelectLabel = Create("TextLabel", {
+Create("TextLabel", {
     Size = UDim2.new(1,-6,0,20),
     BackgroundTransparency = 1,
     Text = "👤 Teleportar para jogador",
@@ -1276,7 +1313,6 @@ AddButton(TeleportPage.Rows, "🗑 Limpar waypoint", function() ClearWaypoint() 
 -- ============================================================
 -- LOOPS DE ESP
 -- ============================================================
-
 task.spawn(function()
     while ScreenGui.Parent do
         if Settings.ESP_Gun then pcall(UpdateGunDropESP) end
@@ -1293,7 +1329,6 @@ task.spawn(function()
     RemoveCoinESP()
 end)
 
--- ESP Player: visual rápido (0.5s) + fetch de roles separado (3s)
 task.spawn(function()
     while ScreenGui.Parent do
         if Settings.ESP_Players then pcall(UpdateESP) end
@@ -1326,8 +1361,8 @@ if RoundStart and RoundStart:IsA("RemoteEvent") then
     RoundStart.OnClientEvent:Connect(function()
         table.clear(RoleCache)
 
+        -- ✅ NÃO zera mais FullbrightOriginal
         if Settings.Fullbright then
-            FullbrightOriginal = nil
             EnableFullbright(true)
         end
 
@@ -1340,7 +1375,6 @@ end
 -- ============================================================
 -- ABA ABOUT
 -- ============================================================
-
 local AboutRow = Create("Frame", { Size = UDim2.new(1,-12,0,0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1 }, AboutPage.Rows)
 local AboutLeft = Create("Frame", { Size = UDim2.new(0.47,0,0,65), Position = UDim2.new(0.01,0,0,0), BackgroundColor3 = Theme.Button, BorderSizePixel = 0 }, AboutRow)
 Create("UICorner", { CornerRadius = UDim.new(0,8) }, AboutLeft)
@@ -1351,7 +1385,6 @@ local AboutVersion = Create("TextLabel", { Size = UDim2.new(1,0,0,20), Position 
 -- ============================================================
 -- TEMAS
 -- ============================================================
-
 local ApplyTheme
 local ThemeSelector, ThemeOptions
 local ThemeOptionButtons = {}
@@ -1380,6 +1413,15 @@ ApplyTheme = function(name)
                 object.BackgroundColor3 = theme.Button; object.TextColor3 = theme.Text
             elseif object:IsA("Frame") and (object.Name == "SliderContainer" or object.Name == "FarmToggleRow") then
                 object.BackgroundColor3 = theme.Button
+            elseif object:IsA("Frame") and object.Name == "ToggleTrack" then
+                -- ✅ fallback: pega o estado atual do toggle pelo Row pai
+                local enabled = false
+                for key, item in pairs(ToggleButtons) do
+                    if item.Row == object.Parent then enabled = Settings[key] == true; break end
+                end
+                object.BackgroundColor3 = enabled and theme.Header or theme.Track
+            elseif object:IsA("Frame") and object.Name == "ToggleKnob" then
+                object.BackgroundColor3 = Color3.new(1,1,1)
             elseif object:IsA("TextLabel") then
                 if object.TextColor3 ~= Color3.fromRGB(255,90,130) then object.TextColor3 = theme.Text end
             end
@@ -1394,12 +1436,16 @@ ApplyTheme = function(name)
         local stroke = btn:FindFirstChildOfClass("UIStroke")
         if stroke then stroke.Color = color end
     end
+
+    -- ✅ Reaplica tema em todos os toggles (garante cor correta)
+    for key, item in pairs(ToggleButtons) do
+        if item.Update then item.Update(Settings[key] == true) end
+    end
 end
 
 -- ============================================================
 -- CONFIG
 -- ============================================================
-
 local ConfigRows = ConfigPage.Rows
 ThemeSelector = AddButton(ConfigRows, "Tema: " .. CurrentTheme .. "  ▼", function() ThemeOptions.Visible = not ThemeOptions.Visible end)
 ThemeOptions = Create("Frame", { Name = "ThemeOptions", Size = UDim2.new(1,-6,0,0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1, Visible = false }, ConfigRows)
