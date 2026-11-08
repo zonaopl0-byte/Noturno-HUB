@@ -1,25 +1,34 @@
-
 --[[ NOTURNO HUB - EXTENSÃO: ABA TROLL
-     Versão: 1.4
-     Requer: NOTURNO HUB v0.9.6+ já carregado
-     
-     Funções:
-       🏷 Name Spoof         (local, mostra "🌙 NOTURNO 🌙")
-       🧲 Stick to Player    (gruda ATRÁS do jogador selecionado)
-       💥 Fling              (arremessa via colisão com velocidade)
-       👤 Seletor de jogador (lista viva)
+     Versão: 2.6.1
+     Base: v2.6
 
-     Fix v1.4:
-       - Fling agora usa AssemblyLinearVelocity no PRÓPRIO personagem
-         (antes aplicava BodyVelocity no alvo e não funcionava por
-          causa do network ownership)
+     Mudanças desta versão:
+       - Name Spoof text: "🌙 NOTURNO 🌙" → "Noturno HUB"
+       - Adicionado SendChatFallback (opcional, comentado) — manda
+         "Noturno HUB" no chat via TextChatService, que APARECE
+         pra todos os jogadores (diferente do BillboardGui)
+       - AVISO: BillboardGui criado por LocalScript NÃO replica.
+         Só VOCÊ vê o spoof acima da cabeça. Para aparecer a todos
+         de verdade, precisaria de um RemoteEvent server-side do
+         jogo, que não temos aqui.
+
+     Herdado da v2.6 (NuclearLaunch server-friendly, stick grace, etc.)
 ]]
 
 local HUB_NAME = "NOTURNO HUB"
-local EXT_VERSION = "1.4"
+local EXT_VERSION = "2.6.1"
+
+-- Texto que aparece no spoof
+local SPOOF_TEXT = "Noturno HUB"
+
+-- Se true, também manda a mensagem no chat (aparece pra todos)
+-- ATENÇÃO: pode dar mute em jogos com anti-spam. Rate-limited.
+local CHAT_FALLBACK_ENABLED = false
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local TextChatService = game:GetService("TextChatService")
 local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 
@@ -112,7 +121,18 @@ local TrollState = {
     Stick = false,
     StickTarget = nil,
     StickConn = nil,
+    StickToggle = nil,
+    StickMissFrames = 0,
 }
+
+local SpectateState = {
+    Enabled = false,
+    Target = nil,
+    Conn = nil,
+    Toggle = nil,
+}
+
+local SpectateOverlay = {}
 
 local AllUIElements = {}
 local function Register(entry) table.insert(AllUIElements, entry) end
@@ -122,6 +142,8 @@ local function ApplyThemeToEntry(entry)
     if not o or not o.Parent then return end
     if entry.Type == "Header" then
         o.TextColor3 = Theme.Text
+    elseif entry.Type == "Divider" then
+        o.BackgroundColor3 = Theme.Track
     elseif entry.Type == "ToggleRow" then
         o.BackgroundColor3 = Theme.Button
         if entry.Label then entry.Label.TextColor3 = Theme.Text end
@@ -139,6 +161,15 @@ local function ApplyThemeToEntry(entry)
         o.TextColor3 = Theme.Text
         local stroke = o:FindFirstChildOfClass("UIStroke")
         if stroke then stroke.Color = Theme.Accent end
+    elseif entry.Type == "FloatingOverlay" then
+        o.BackgroundColor3 = Theme.Main
+        local stroke = o:FindFirstChildOfClass("UIStroke")
+        if stroke then stroke.Color = Theme.Accent end
+    elseif entry.Type == "FloatingButton" then
+        o.BackgroundColor3 = Theme.Button
+        o.TextColor3 = Theme.Text
+    elseif entry.Type == "FloatingLabel" then
+        o.TextColor3 = Theme.Accent
     end
 end
 
@@ -158,6 +189,20 @@ local function GetRoot(player)
 end
 
 -- ============================================================
+-- CHAT FALLBACK (opcional — aparece pra todos no chat)
+-- ============================================================
+local function SendChatFallback()
+    if not CHAT_FALLBACK_ENABLED then return end
+    pcall(function()
+        local channels = TextChatService:FindFirstChild("TextChannels")
+        local general = channels and channels:FindFirstChild("RBXGeneral")
+        if general then
+            general:SendAsync(SPOOF_TEXT)
+        end
+    end)
+end
+
+-- ============================================================
 -- NAME SPOOF
 -- ============================================================
 local function ApplyNameSpoof(on)
@@ -173,7 +218,7 @@ local function ApplyNameSpoof(on)
         local billboard = Instance.new("BillboardGui")
         billboard.Name = "__TrollNameSpoof"
         billboard.Adornee = head
-        billboard.Size = UDim2.fromOffset(200, 50)
+        billboard.Size = UDim2.fromOffset(220, 50)
         billboard.StudsOffset = Vector3.new(0, 2.5, 0)
         billboard.AlwaysOnTop = true
         billboard.Parent = head
@@ -181,20 +226,27 @@ local function ApplyNameSpoof(on)
         local label = Instance.new("TextLabel")
         label.Size = UDim2.fromScale(1, 1)
         label.BackgroundTransparency = 1
-        label.Text = "🌙 NOTURNO 🌙"
-        label.TextColor3 = Color3.fromRGB(255, 215, 0)
+        label.Text = SPOOF_TEXT
+        label.TextColor3 = Color3.fromRGB(160, 120, 255)
         label.TextStrokeTransparency = 0.2
+        label.TextStrokeColor3 = Color3.fromRGB(28, 22, 40)
         label.Font = Enum.Font.GothamBold
-        label.TextSize = 18
+        label.TextSize = 20
         label.Parent = billboard
+
+        SendChatFallback()
     end
 end
 
 -- ============================================================
--- STICK TO PLAYER (ATRÁS do alvo)
+-- STICK TO PLAYER (com grace period)
 -- ============================================================
+local STICK_GRACE_FRAMES = 30
+
 local function StopStick()
     TrollState.Stick = false
+    TrollState.StickTarget = nil
+    TrollState.StickMissFrames = 0
     if TrollState.StickConn then
         pcall(function() TrollState.StickConn:Disconnect() end)
         TrollState.StickConn = nil
@@ -206,58 +258,513 @@ local function StartStick(target)
     if not target then return end
     TrollState.Stick = true
     TrollState.StickTarget = target
+    TrollState.StickMissFrames = 0
 
     TrollState.StickConn = RunService.Heartbeat:Connect(function()
         if not TrollState.Stick then return end
-        local tRoot = GetRoot(target)
+
+        if not target or not target.Parent then
+            StopStick()
+            if TrollState.StickToggle then
+                TrollState.StickToggle.SetState(false)
+            end
+            return
+        end
+
         local myRoot = GetRoot()
-        if not tRoot or not myRoot then return end
-        -- 2 studs ATRÁS do alvo (mesma orientação dele)
+        if not myRoot then return end
+
+        local tRoot = GetRoot(target)
+        if not tRoot then
+            TrollState.StickMissFrames = TrollState.StickMissFrames + 1
+            if TrollState.StickMissFrames >= STICK_GRACE_FRAMES then
+                StopStick()
+                if TrollState.StickToggle then
+                    TrollState.StickToggle.SetState(false)
+                end
+            end
+            return
+        end
+
+        TrollState.StickMissFrames = 0
+
         myRoot.CFrame = tRoot.CFrame * CFrame.new(0, 0, 2)
         myRoot.AssemblyLinearVelocity = Vector3.zero
     end)
 end
 
 -- ============================================================
--- FLING (método correto: velocidade no PRÓPRIO personagem)
+-- SPECTATE
 -- ============================================================
-local FlingsBusy = false
+local AdvanceSpectate
 
-local function FlingPlayer(target)
-    if not target or target == LocalPlayer then return end
-    local tChar = target.Character
-    if not tChar then return end
-
-    local myRoot = GetRoot(LocalPlayer)
-    local tRoot = tChar:FindFirstChild("HumanoidRootPart")
-    if not myRoot or not tRoot then return end
-
-    -- Salva posição original do seu personagem
-    local originalCFrame = myRoot.CFrame
-
-    -- 1. Teleporta colado no alvo (para colidir)
-    myRoot.CFrame = tRoot.CFrame * CFrame.new(0, 0, 1.5)
-    myRoot.AssemblyLinearVelocity = Vector3.zero
-
-    -- 2. Aplica velocidade GIGANTE no SEU personagem (você controla)
-    myRoot.AssemblyLinearVelocity = Vector3.new(
-        math.random(-1000, 1000),
-        math.random(500, 1000),
-        math.random(-1000, 1000)
-    )
-
-    -- 3. Gira seu personagem para aumentar a transferência de energia
-    myRoot.AssemblyAngularVelocity = Vector3.new(0, 0, 99999)
-
-    -- 4. Espera a colisão acontecer
-    task.wait(0.25)
-
-    -- 5. Restaura seu personagem
-    if myRoot and myRoot.Parent then
-        myRoot.AssemblyLinearVelocity = Vector3.zero
-        myRoot.AssemblyAngularVelocity = Vector3.zero
-        myRoot.CFrame = originalCFrame
+local function GetSpectateCandidates()
+    local list = {}
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= LocalPlayer then
+            local char = p.Character
+            local hum = char and char:FindFirstChildOfClass("Humanoid")
+            if hum and hum.Health > 0 then
+                table.insert(list, p)
+            end
+        end
     end
+    return list
+end
+
+local function UpdateSpectateLabel()
+    local frame = SpectateOverlay.Frame
+    if not frame or not frame.Parent then return end
+    if SpectateState.Enabled then
+        frame.Visible = true
+        local lbl = SpectateOverlay.Label
+        if lbl and lbl.Parent then
+            if SpectateState.Target and SpectateState.Target.Parent then
+                lbl.Text = "👁 " .. SpectateState.Target.Name
+            else
+                lbl.Text = "👁 (procurando...)"
+            end
+        end
+    else
+        frame.Visible = false
+    end
+end
+
+local function ApplySpectateCamera()
+    if not SpectateState.Enabled then return end
+    local t = SpectateState.Target
+    if not t or not t.Parent then
+        if AdvanceSpectate then AdvanceSpectate(1) end
+        return
+    end
+    local tHum = t.Character and t.Character:FindFirstChildOfClass("Humanoid")
+    local cam = workspace.CurrentCamera
+    if tHum and cam and cam.CameraSubject ~= tHum then
+        cam.CameraSubject = tHum
+    end
+end
+
+local function StartSpectateAt(target)
+    if not target then return end
+    SpectateState.Enabled = true
+    SpectateState.Target = target
+    if not SpectateState.Conn then
+        SpectateState.Conn = RunService.Heartbeat:Connect(ApplySpectateCamera)
+    end
+    ApplySpectateCamera()
+    UpdateSpectateLabel()
+end
+
+local function StopSpectate(resetToggle)
+    SpectateState.Enabled = false
+    SpectateState.Target = nil
+    if SpectateState.Conn then
+        pcall(function() SpectateState.Conn:Disconnect() end)
+        SpectateState.Conn = nil
+    end
+    local myHum = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+    local cam = workspace.CurrentCamera
+    if myHum and cam then cam.CameraSubject = myHum end
+    if resetToggle and SpectateState.Toggle then
+        SpectateState.Toggle.SetState(false)
+    end
+    UpdateSpectateLabel()
+end
+
+AdvanceSpectate = function(direction)
+    local candidates = GetSpectateCandidates()
+    if #candidates == 0 then
+        StopSpectate(true)
+        return
+    end
+    local currentIdx
+    for i, p in ipairs(candidates) do
+        if p == SpectateState.Target then currentIdx = i; break end
+    end
+    direction = direction or 1
+    local newIdx
+    if not currentIdx then
+        newIdx = (direction >= 0) and 1 or #candidates
+    else
+        newIdx = ((currentIdx - 1 + direction) % #candidates) + 1
+    end
+    SpectateState.Target = candidates[newIdx]
+    UpdateSpectateLabel()
+end
+
+-- ============================================================
+-- SPECTATE FLOATING OVERLAY (base inferior)
+-- ============================================================
+local function IsPointOverButton(frame, point)
+    for _, child in ipairs(frame:GetChildren()) do
+        if child:IsA("TextButton") and child.Visible then
+            local ap, as = child.AbsolutePosition, child.AbsoluteSize
+            if point.X >= ap.X and point.X <= ap.X + as.X
+               and point.Y >= ap.Y and point.Y <= ap.Y + as.Y then
+                return true
+            end
+        end
+    end
+    return false
+end
+
+local function CreateSpectateOverlay()
+    local gui = Instance.new("ScreenGui")
+    gui.Name = "Noturno_Troll_SpectateOverlay"
+    gui.ResetOnSpawn = false
+    gui.DisplayOrder = 10000
+    gui.IgnoreGuiInset = false
+    gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+
+    local mounted = false
+    pcall(function()
+        local hui = gethui and gethui()
+        if hui and typeof(hui) == "Instance" then
+            gui.Parent = hui
+            mounted = true
+        end
+    end)
+    if not mounted then
+        pcall(function() gui.Parent = game:GetService("CoreGui") end)
+    end
+    if not gui.Parent then
+        gui.Parent = PlayerGui
+    end
+
+    local frame = Create("Frame", {
+        Name = "Overlay",
+        Size = UDim2.fromOffset(380, 44),
+        Position = UDim2.new(0.5, -190, 1, -60),
+        BackgroundColor3 = Theme.Main,
+        BackgroundTransparency = 0.05,
+        BorderSizePixel = 0,
+        Visible = false,
+        Active = true,
+    }, gui)
+    Create("UICorner", { CornerRadius = UDim.new(0, 10) }, frame)
+    Create("UIStroke", {
+        Color = Theme.Accent, Thickness = 1, Transparency = 0.3,
+        ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+    }, frame)
+
+    local prevBtn = Create("TextButton", {
+        Size = UDim2.new(0, 76, 1, -8),
+        Position = UDim2.fromOffset(4, 4),
+        BackgroundColor3 = Theme.Button,
+        Text = "⏮ Anterior",
+        TextColor3 = Theme.Text, TextSize = 10,
+        Font = Enum.Font.GothamBold, BorderSizePixel = 0,
+        Active = true, AutoButtonColor = false, ZIndex = 2,
+    }, frame)
+    Create("UICorner", { CornerRadius = UDim.new(0, 7) }, prevBtn)
+
+    local nextBtn = Create("TextButton", {
+        Size = UDim2.new(0, 76, 1, -8),
+        Position = UDim2.fromOffset(276, 4),
+        BackgroundColor3 = Theme.Button,
+        Text = "⏭ Próximo",
+        TextColor3 = Theme.Text, TextSize = 10,
+        Font = Enum.Font.GothamBold, BorderSizePixel = 0,
+        Active = true, AutoButtonColor = false, ZIndex = 2,
+    }, frame)
+    Create("UICorner", { CornerRadius = UDim.new(0, 7) }, nextBtn)
+
+    local label = Create("TextLabel", {
+        Size = UDim2.new(0, 188, 1, -8),
+        Position = UDim2.fromOffset(84, 4),
+        BackgroundTransparency = 1,
+        Text = "👁 (procurando...)",
+        TextColor3 = Theme.Accent, TextSize = 11,
+        Font = Enum.Font.GothamBold,
+        TextTruncate = Enum.TextTruncate.AtEnd,
+        TextXAlignment = Enum.TextXAlignment.Center,
+        ZIndex = 2,
+    }, frame)
+
+    local closeBtn = Create("TextButton", {
+        Size = UDim2.new(0, 20, 0, 20),
+        Position = UDim2.fromOffset(356, 12),
+        BackgroundColor3 = Color3.fromRGB(200, 40, 40),
+        Text = "✕",
+        TextColor3 = Color3.new(1, 1, 1), TextSize = 12,
+        Font = Enum.Font.GothamBold, BorderSizePixel = 0,
+        Active = true, AutoButtonColor = false, ZIndex = 3,
+    }, frame)
+    Create("UICorner", { CornerRadius = UDim.new(1, 0) }, closeBtn)
+
+    local dragging = false
+    local dragStart, startPos
+    frame.InputBegan:Connect(function(input)
+        if input.UserInputType ~= Enum.UserInputType.MouseButton1
+           and input.UserInputType ~= Enum.UserInputType.Touch then return end
+        if IsPointOverButton(frame, input.Position) then return end
+        dragging = true
+        dragStart = input.Position
+        startPos = frame.Position
+    end)
+    local dragConn = UserInputService.InputChanged:Connect(function(input)
+        if not dragging then return end
+        if input.UserInputType ~= Enum.UserInputType.MouseMovement
+           and input.UserInputType ~= Enum.UserInputType.Touch then return end
+        local delta = input.Position - dragStart
+        local vp = workspace.CurrentCamera.ViewportSize
+        local newX = math.clamp(
+            startPos.X.Offset + delta.X,
+            -frame.AbsoluteSize.X + 40,
+            vp.X - 40
+        )
+        local newY = math.clamp(
+            startPos.Y.Offset + delta.Y,
+            0,
+            vp.Y - 40
+        )
+        frame.Position = UDim2.fromOffset(newX, newY)
+    end)
+    local dragEndConn = UserInputService.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+           or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = false
+        end
+    end)
+
+    prevBtn.MouseButton1Click:Connect(function()
+        if SpectateState.Enabled then AdvanceSpectate(-1) end
+    end)
+    nextBtn.MouseButton1Click:Connect(function()
+        if SpectateState.Enabled then AdvanceSpectate(1) end
+    end)
+    closeBtn.MouseButton1Click:Connect(function()
+        StopSpectate(true)
+    end)
+
+    Register({ Type = "FloatingOverlay", Obj = frame })
+    Register({ Type = "FloatingButton", Obj = prevBtn })
+    Register({ Type = "FloatingButton", Obj = nextBtn })
+    Register({ Type = "FloatingLabel", Obj = label })
+
+    SpectateOverlay.Gui = gui
+    SpectateOverlay.Frame = frame
+    SpectateOverlay.Label = label
+    SpectateOverlay.DragConn = dragConn
+    SpectateOverlay.DragEndConn = dragEndConn
+end
+
+-- ============================================================
+-- FLING v2.2 — MODO NUCLEAR ☢️ (server-friendly)
+-- ============================================================
+local FLING_FORCE        = 450000
+local FLING_TIME         = 5.0
+local FLING_TARGET_PUSH  = 25000
+local FLING_TARGET_SPIN  = 180000
+local FLING_INJECT_EVERY = 3
+
+local FLING_NUKE_ENABLED = true
+local FLING_NUKE_VEL     = 1000000
+local FLING_NUKE_SPIN    = 100000
+local FLING_NUKE_HOLD    = 5.0
+
+local FlingBusy = false
+local FlingSavedCollide = {}
+local FlingNoclipConn = nil
+
+local function SetFlingNoclip(enabled)
+    if FlingNoclipConn then
+        pcall(function() FlingNoclipConn:Disconnect() end)
+        FlingNoclipConn = nil
+    end
+    if not enabled then
+        for part, canCollide in pairs(FlingSavedCollide) do
+            if part.Parent then part.CanCollide = canCollide end
+        end
+        table.clear(FlingSavedCollide)
+        return
+    end
+    FlingNoclipConn = RunService.Stepped:Connect(function()
+        local char = LocalPlayer.Character
+        if not char then return end
+        for _, part in ipairs(char:GetChildren()) do
+            if part:IsA("BasePart") then
+                if FlingSavedCollide[part] == nil then
+                    FlingSavedCollide[part] = part.CanCollide
+                end
+                part.CanCollide = false
+            end
+        end
+    end)
+end
+
+local function NuclearLaunch(target)
+    local targetRoot = GetRoot(target)
+    if not targetRoot or not targetRoot.Parent then return end
+
+    local targetChar = target.Character
+    local targetHum = targetChar and targetChar:FindFirstChildOfClass("Humanoid")
+    if not targetHum then return end
+
+    local savedState = targetHum:GetState()
+    local savedPlatformStand = targetHum.PlatformStand
+    local savedWalkSpeed = targetHum.WalkSpeed
+
+    pcall(function()
+        targetHum:SetStateEnabled(Enum.HumanoidStateType.Physics, true)
+        targetHum:ChangeState(Enum.HumanoidStateType.Physics)
+        targetHum.PlatformStand = true
+        targetHum.WalkSpeed = 0
+    end)
+
+    local bv = Instance.new("BodyVelocity")
+    bv.Name = "__TrollNukeVel"
+    bv.MaxForce = Vector3.new(1e12, 1e12, 1e12)
+    bv.P = 1e6
+    bv.Velocity = Vector3.new(0, FLING_NUKE_VEL, 0)
+    pcall(function() bv.Parent = targetRoot end)
+
+    local bav = Instance.new("BodyAngularVelocity")
+    bav.Name = "__TrollNukeSpin"
+    bav.MaxTorque = Vector3.new(1e12, 1e12, 1e12)
+    bav.P = 1e6
+    bav.AngularVelocity = Vector3.new(FLING_NUKE_SPIN, FLING_NUKE_SPIN, FLING_NUKE_SPIN)
+    pcall(function() bav.Parent = targetRoot end)
+
+    local started = os.clock()
+    local conn
+    conn = RunService.Heartbeat:Connect(function()
+        if os.clock() - started >= FLING_NUKE_HOLD then
+            if conn then conn:Disconnect() end
+            return
+        end
+
+        local currentRoot = GetRoot(target)
+        local currentHum = target.Character and target.Character:FindFirstChildOfClass("Humanoid")
+        if not currentRoot or not currentHum then return end
+
+        pcall(function()
+            currentRoot.AssemblyLinearVelocity = Vector3.new(0, FLING_NUKE_VEL, 0)
+            currentRoot.AssemblyAngularVelocity = Vector3.new(
+                FLING_NUKE_SPIN, FLING_NUKE_SPIN, FLING_NUKE_SPIN
+            )
+
+            if currentHum:GetState() ~= Enum.HumanoidStateType.Physics then
+                currentHum:ChangeState(Enum.HumanoidStateType.Physics)
+            end
+            if not currentHum.PlatformStand then
+                currentHum.PlatformStand = true
+            end
+
+            if bv.Parent ~= currentRoot then bv.Parent = currentRoot end
+            if bav.Parent ~= currentRoot then bav.Parent = currentRoot end
+        end)
+    end)
+
+    task.delay(FLING_NUKE_HOLD, function()
+        if bv and bv.Parent then bv:Destroy() end
+        if bav and bav.Parent then bav:Destroy() end
+
+        local currentHum = target.Character and target.Character:FindFirstChildOfClass("Humanoid")
+        if currentHum and currentHum.Parent then
+            pcall(function()
+                currentHum.PlatformStand = savedPlatformStand
+                currentHum.WalkSpeed = savedWalkSpeed
+                currentHum:ChangeState(savedState)
+            end)
+        end
+    end)
+end
+
+local function FlingPlayer(target, duration)
+    if not target or target == LocalPlayer then return false end
+    if FlingBusy then return false end
+    local root = GetRoot()
+    if not root then return false end
+
+    FlingBusy = true
+    duration = duration or FLING_TIME
+    local home = root.CFrame
+
+    local spin = Instance.new("BodyAngularVelocity")
+    spin.MaxTorque = Vector3.new(1e9, 1e9, 1e9)
+    spin.AngularVelocity = Vector3.new(FLING_FORCE * 0.3, FLING_FORCE, FLING_FORCE * 0.3)
+    spin.Parent = root
+
+    local targetSpin = Instance.new("BodyAngularVelocity")
+    targetSpin.MaxTorque = Vector3.new(1e9, 1e9, 1e9)
+    targetSpin.AngularVelocity = Vector3.zero
+
+    SetFlingNoclip(true)
+
+    local started = os.clock()
+    local frameCount = 0
+
+    local glueConn = RunService.Stepped:Connect(function()
+        if not root.Parent then return end
+        if os.clock() - started >= duration then return end
+
+        local currentTarget = GetRoot(target)
+        if not currentTarget then return end
+
+        root.CFrame = currentTarget.CFrame
+        root.AssemblyLinearVelocity = Vector3.zero
+        root.AssemblyAngularVelocity = spin.AngularVelocity
+
+        if targetSpin.Parent ~= currentTarget then
+            targetSpin.Parent = currentTarget
+        end
+
+        frameCount = frameCount + 1
+        if frameCount % FLING_INJECT_EVERY == 0 then
+            pcall(function()
+                currentTarget.AssemblyLinearVelocity = Vector3.new(
+                    math.random(-FLING_TARGET_PUSH, FLING_TARGET_PUSH),
+                    FLING_TARGET_PUSH * 2,
+                    math.random(-FLING_TARGET_PUSH, FLING_TARGET_PUSH)
+                )
+                currentTarget.AssemblyAngularVelocity = Vector3.new(
+                    math.random(-FLING_TARGET_SPIN, FLING_TARGET_SPIN),
+                    FLING_TARGET_SPIN,
+                    math.random(-FLING_TARGET_SPIN, FLING_TARGET_SPIN)
+                )
+            end)
+            if targetSpin.Parent then
+                targetSpin.AngularVelocity = Vector3.new(
+                    FLING_TARGET_SPIN, FLING_TARGET_SPIN, FLING_TARGET_SPIN
+                )
+            end
+        end
+    end)
+
+    task.wait(duration)
+
+    if glueConn then glueConn:Disconnect() end
+
+    spin:Destroy()
+    if targetSpin.Parent then targetSpin:Destroy() end
+
+    if FLING_NUKE_ENABLED then
+        NuclearLaunch(target)
+    else
+        local finalTarget = GetRoot(target)
+        if finalTarget and finalTarget.Parent then
+            pcall(function()
+                finalTarget.AssemblyLinearVelocity = Vector3.new(
+                    math.random(-8000, 8000), 50000, math.random(-8000, 8000)
+                )
+                finalTarget.AssemblyAngularVelocity = Vector3.new(
+                    math.random(-200000, 200000),
+                    math.random(-200000, 200000),
+                    math.random(-200000, 200000)
+                )
+            end)
+        end
+    end
+
+    if root.Parent then
+        root.AssemblyAngularVelocity = Vector3.zero
+        root.AssemblyLinearVelocity = Vector3.zero
+        root.CFrame = home
+    end
+    SetFlingNoclip(false)
+    FlingBusy = false
+    return true
 end
 
 -- ============================================================
@@ -272,6 +779,18 @@ local function AddHeader(parent, text, order)
     }, parent)
     Register({ Type = "Header", Obj = lbl })
     return lbl
+end
+
+local function AddDivider(parent, order)
+    local line = Create("Frame", {
+        Size = UDim2.new(1, 0, 0, 1),
+        BackgroundColor3 = Theme.Track,
+        BackgroundTransparency = 0.5,
+        BorderSizePixel = 0,
+        LayoutOrder = order or 5,
+    }, parent)
+    Register({ Type = "Divider", Obj = line })
+    return line
 end
 
 local function AddToggle(parent, title, initial, callback, order)
@@ -323,17 +842,38 @@ local function AddToggle(parent, title, initial, callback, order)
     return { Row = row, SetState = updateVisual }
 end
 
-local function AddButton(parent, text, callback, order)
+local function AddButton(parent, text, callback, order, sizeOverride)
     local btn = Create("TextButton", {
-        Size = UDim2.new(1,0,0,30), BackgroundColor3 = Theme.Button,
+        Size = sizeOverride or UDim2.new(1,0,0,30),
+        BackgroundColor3 = Theme.Button,
         Text = text, TextColor3 = Theme.Text, TextSize = 11,
         Font = Enum.Font.GothamBold, LayoutOrder = order or 10,
     }, parent)
     Create("UICorner", { CornerRadius = UDim.new(0,7) }, btn)
     Create("UIStroke", { Color = Theme.Accent, Thickness = 1, Transparency = 0.6 }, btn)
-    btn.MouseButton1Click:Connect(callback)
+    btn.MouseButton1Click:Connect(function() callback(btn) end)
     Register({ Type = "Button", Obj = btn })
     return btn
+end
+
+local function AddButtonRow(parent, buttons, order)
+    local row = Create("Frame", {
+        Size = UDim2.new(1, 0, 0, 30),
+        BackgroundTransparency = 1,
+        LayoutOrder = order or 10,
+    }, parent)
+    Create("UIListLayout", {
+        FillDirection = Enum.FillDirection.Horizontal,
+        Padding = UDim.new(0, 8),
+        SortOrder = Enum.SortOrder.LayoutOrder,
+    }, row)
+    local count = #buttons
+    local pad = 8
+    for i, spec in ipairs(buttons) do
+        local size = UDim2.new(1/count, -(pad * (count - 1) / count), 1, 0)
+        AddButton(row, spec.Text, spec.Callback, i, size)
+    end
+    return row
 end
 
 -- ============================================================
@@ -345,6 +885,11 @@ local PlayerListBtn, PlayerList, RefreshList
 local function SelectTarget(p)
     SelectedPlayer = p
     TrollState.StickTarget = p
+
+    if TrollState.Stick and p then
+        StartStick(p)
+    end
+
     if PlayerListBtn and PlayerListBtn.Parent then
         PlayerListBtn.Text = p and ("🎯 Alvo: " .. p.Name .. "  ▼") or "🎯 Selecione um jogador  ▼"
     end
@@ -405,48 +950,113 @@ local Col = Create("Frame", {
 Create("UIListLayout", { Padding = UDim.new(0,8), SortOrder = Enum.SortOrder.LayoutOrder }, Col)
 
 -- ============================================================
+-- CRIA OVERLAY
+-- ============================================================
+CreateSpectateOverlay()
+
+-- ============================================================
 -- INJEÇÃO
 -- ============================================================
 AddHeader(Col, "🏷 NAME SPOOF", 1)
-AddToggle(Col, "🏷 Mostrar '🌙 NOTURNO 🌙' acima de você", false, function(state)
+AddToggle(Col, "Mostrar 'Noturno HUB' acima de você", false, function(state)
     TrollState.NameSpoof = state
     ApplyNameSpoof(state)
 end, 2)
 
-AddHeader(Col, "👤 SELECIONAR JOGADOR", 3)
-BuildPlayerSelector(Col, 4)
+AddDivider(Col, 3)
 
-AddHeader(Col, "🎪 INTERAÇÃO", 6)
-AddToggle(Col, "🧲 Stick to Player (grudar ATRÁS)", false, function(state)
+AddHeader(Col, "👤 SELECIONAR JOGADOR", 4)
+BuildPlayerSelector(Col, 5)
+
+AddDivider(Col, 6)
+
+AddHeader(Col, "🎪 AÇÕES", 7)
+
+TrollState.StickToggle = AddToggle(Col, "🧲 Stick to Player (grudar ATRÁS)", false, function(state)
     if state then
         if not SelectedPlayer then
             warn("[Troll] Selecione um jogador primeiro.")
+            if TrollState.StickToggle then TrollState.StickToggle.SetState(false) end
             return
         end
         StartStick(SelectedPlayer)
     else
         StopStick()
     end
-end, 7)
-
-AddButton(Col, "💥 Fling (arremessar alvo)", function()
-    if not SelectedPlayer then
-        warn("[Troll] Selecione um jogador primeiro.")
-        return
-    end
-    task.spawn(function() FlingPlayer(SelectedPlayer) end)
 end, 8)
 
-AddButton(Col, "💥 Fling TODOS", function()
-    task.spawn(function()
-        for _, p in ipairs(Players:GetPlayers()) do
-            if p ~= LocalPlayer then
-                FlingPlayer(p)
-                task.wait(0.3)
-            end
+SpectateState.Toggle = AddToggle(Col, "👁 Spectate (botões flutuantes)", false, function(state)
+    if state then
+        local candidates = GetSpectateCandidates()
+        if #candidates == 0 then
+            warn("[Troll] Nenhum jogador vivo disponível para spectar.")
+            if SpectateState.Toggle then SpectateState.Toggle.SetState(false) end
+            return
         end
-    end)
+        StartSpectateAt(candidates[1])
+    else
+        StopSpectate(false)
+    end
 end, 9)
+
+-- ============================================================
+-- BOTÕES DE NUKE
+-- ============================================================
+local NukeTodosArmed = false
+local NukeTodosTimer = nil
+local NUKE_TODOS_CONFIRM_TIME = 3
+
+AddButtonRow(Col, {
+    { Text = "☢️ Nuke (infinito)", Callback = function()
+        if not SelectedPlayer then
+            warn("[Troll] Selecione um jogador primeiro.")
+            return
+        end
+        task.spawn(function() FlingPlayer(SelectedPlayer) end)
+    end },
+
+    { Text = "☢️ Nuke TODOS", Callback = function(btn)
+        if NukeTodosArmed then
+            NukeTodosArmed = false
+            if NukeTodosTimer then
+                pcall(task.cancel, NukeTodosTimer)
+                NukeTodosTimer = nil
+            end
+            if btn and btn.Parent then
+                btn.Text = "☢️ Nuke TODOS"
+                pcall(function() btn.BackgroundColor3 = Theme.Button end)
+            end
+
+            task.spawn(function()
+                for _, p in ipairs(Players:GetPlayers()) do
+                    if p ~= LocalPlayer then
+                        pcall(FlingPlayer, p, 1.2)
+                        task.wait(0.15)
+                    end
+                end
+            end)
+            return
+        end
+
+        NukeTodosArmed = true
+        if btn and btn.Parent then
+            btn.Text = "⚠️ CONFIRMAR? (" .. NUKE_TODOS_CONFIRM_TIME .. "s)"
+            pcall(function() btn.BackgroundColor3 = Color3.fromRGB(200, 40, 40) end)
+        end
+
+        if NukeTodosTimer then
+            pcall(task.cancel, NukeTodosTimer)
+        end
+        NukeTodosTimer = task.delay(NUKE_TODOS_CONFIRM_TIME, function()
+            NukeTodosArmed = false
+            NukeTodosTimer = nil
+            if btn and btn.Parent then
+                btn.Text = "☢️ Nuke TODOS"
+                pcall(function() btn.BackgroundColor3 = Theme.Button end)
+            end
+        end)
+    end },
+}, 10)
 
 -- ============================================================
 -- LOOP DE TEMA
@@ -460,6 +1070,7 @@ task.spawn(function()
             Theme = Themes[newName] or Themes.Noturno
             CurrentThemeName = newName
             ReapplyTheme()
+            UpdateSpectateLabel()
         end
         task.wait(1)
     end
@@ -474,6 +1085,8 @@ local RoundStart = Gameplay and Gameplay:FindFirstChild("RoundStart")
 if RoundStart and RoundStart:IsA("RemoteEvent") then
     RoundStart.OnClientEvent:Connect(function()
         StopStick()
+        if TrollState.StickToggle then TrollState.StickToggle.SetState(false) end
+        StopSpectate(true)
         if TrollState.NameSpoof then
             task.delay(0.5, function()
                 ApplyNameSpoof(true)
@@ -485,9 +1098,34 @@ end
 -- ============================================================
 -- LIMPEZA
 -- ============================================================
+local function DestroySpectateOverlay()
+    if SpectateOverlay.DragConn then
+        pcall(function() SpectateOverlay.DragConn:Disconnect() end)
+        SpectateOverlay.DragConn = nil
+    end
+    if SpectateOverlay.DragEndConn then
+        pcall(function() SpectateOverlay.DragEndConn:Disconnect() end)
+        SpectateOverlay.DragEndConn = nil
+    end
+    if SpectateOverlay.Gui then
+        pcall(function() SpectateOverlay.Gui:Destroy() end)
+        SpectateOverlay.Gui = nil
+        SpectateOverlay.Frame = nil
+        SpectateOverlay.Label = nil
+    end
+end
+
 ScreenGui.AncestryChanged:Connect(function()
     if not ScreenGui.Parent then
         StopStick()
+        StopSpectate(false)
+        SetFlingNoclip(false)
+        DestroySpectateOverlay()
+        if NukeTodosTimer then
+            pcall(task.cancel, NukeTodosTimer)
+            NukeTodosTimer = nil
+        end
+        NukeTodosArmed = false
         local char = LocalPlayer.Character
         if char then
             local head = char:FindFirstChild("Head")
