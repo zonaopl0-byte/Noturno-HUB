@@ -1,19 +1,14 @@
 --[[
     NOTURNO HUB - PAINEL PRINCIPAL
-    Versão: 0.9.7
+    Versão: 0.9.8
 
-    Alterações v0.9.7:
-    - Fix typo FullbrightOriginal
-    - Toggles seguem o tema em tempo real
-    - ToggleTrack/Knob reaplicam cor ao trocar tema
-    - RoundStart não zera mais FullbrightOriginal
-    - DefaultWalkSpeed/JumpPower capturados do personagem real
-    - FloatingButton arrastável
-    - Stepped loops guardados e desconectados no Unload
+    Alterações v0.9.8:
+    - Anti-Fling portado do Mario Hub (Stepped, GetDescendants, linear+angular, cap, restauração)
+    - Contador de moedas usa emoji 💲
 ]]
 
 local HUB_NAME = "NOTURNO HUB"
-local HUB_VERSION = "0.9.7"
+local HUB_VERSION = "0.9.8"
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -53,7 +48,10 @@ local Settings = {
     FlyEnabled = false, InfJump = false, LimitInfJump = false,
     WalkSpeedEnabled = false, JumpPowerEnabled = false,
     ESP_Players = false, ESP_Gun = false, ESP_Coin = false,
-    XRay = false, Fullbright = false
+    XRay = false, Fullbright = false,
+    -- ✅ ANTI-FLING (Mario Hub)
+    FlingVelocityCap = 120,
+    FlingAngularCap = 10
 }
 
 -- ========== VARIÁVEIS GLOBAIS ==========
@@ -63,15 +61,14 @@ local OriginalCollision = {}
 local InfJumpCount = 0
 local LastJumpTime = 0
 
--- Loops guardados (para desconectar no Unload)
-local SteppedConnections = {}
+-- ✅ ANTI-FLING (Mario Hub): guarda CanCollide original para restaurar no off
+local FlingSavedCollide = {}
 
--- X-Ray e Fullbright
+local SteppedConnections = {}
 local XRayOriginal = {}
 local XRayConnection
 local FullbrightOriginal = nil
 
--- ESP Variables
 local RoleCache = {}
 local ESPObjects = {}
 local ESPGun = { Target = nil, Highlight = nil, Billboard = nil }
@@ -80,10 +77,8 @@ local RoleFetchBusy = false
 local LastRoleFetch = 0
 local RoleFetchStart = 0
 
--- Teleport Variables
 local SavedWaypoint = nil
 
--- Declarações forward
 local ToggleButtons = {}
 local ResetAllToggles = nil
 
@@ -154,11 +149,10 @@ local CoinCounterFrame = Create("Frame", {
 }, ScreenGui)
 Create("UICorner", { CornerRadius = UDim.new(0, 8) }, CoinCounterFrame)
 Create("UIStroke", { Color = Color3.fromRGB(255, 215, 0), Thickness = 1.5, Transparency = 0.3 }, CoinCounterFrame)
-
 local CoinCounterText = Create("TextLabel", {
     Size = UDim2.fromScale(1, 1),
     BackgroundTransparency = 1,
-    Text = "🪙 Moedas: 0",
+    Text = "💲 Moedas: 0",
     TextColor3 = Color3.fromRGB(255, 215, 0),
     TextSize = 14,
     Font = Enum.Font.GothamBold,
@@ -173,9 +167,7 @@ DragBlock.InputBegan:Connect(function(input)
     end
 end)
 DragBlock.InputEnded:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-        dragging = false
-    end
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then dragging = false end
 end)
 UserInputService.InputChanged:Connect(function(input)
     if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
@@ -192,9 +184,7 @@ Floating.InputBegan:Connect(function(input)
     end
 end)
 Floating.InputEnded:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-        floatingDragging = false
-    end
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then floatingDragging = false end
 end)
 UserInputService.InputChanged:Connect(function(input)
     if floatingDragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
@@ -264,7 +254,6 @@ local function GetRole(player)
     local char = player.Character
     local hum = char and char:FindFirstChildOfClass("Humanoid")
     if not hum or hum.Health <= 0 then return "Dead" end
-
     local entry = RoleCache[player.Name] or RoleCache[player.UserId] or RoleCache[tostring(player.UserId)]
     if type(entry) == "table" then
         if entry.Dead then return "Dead" end
@@ -274,10 +263,8 @@ local function GetRole(player)
         local role = NormalizeRole(entry)
         if role then return role end
     end
-
     if GetPlayerTool(player, "Knife") then return "Murderer" end
     if GetPlayerTool(player, "Gun") or GetPlayerTool(player, "Revolver") then return "Sheriff" end
-
     return "Unknown"
 end
 
@@ -296,20 +283,15 @@ local function CreateESP(player)
     local head = character and character:FindFirstChild("Head")
     if not character or not head then return end
     RemoveESP(player)
-
     local role = GetRole(player)
     local color = RoleColors[role] or RoleColors.Unknown
-
     local highlight = Instance.new("Highlight")
     highlight.Name = "KittyESP"
     highlight.Adornee = character
     highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-    highlight.FillColor = color
-    highlight.OutlineColor = color
-    highlight.FillTransparency = 0.55
-    highlight.OutlineTransparency = 0
+    highlight.FillColor = color; highlight.OutlineColor = color
+    highlight.FillTransparency = 0.55; highlight.OutlineTransparency = 0
     highlight.Parent = ScreenGui
-
     local billboard = Instance.new("BillboardGui")
     billboard.Name = "KittyESPInfo"
     billboard.Adornee = head
@@ -317,22 +299,13 @@ local function CreateESP(player)
     billboard.StudsOffset = Vector3.new(0,3,0)
     billboard.AlwaysOnTop = true
     billboard.Parent = ScreenGui
-
     local label = Create("TextLabel", {
-        Size = UDim2.fromScale(1,1),
-        BackgroundTransparency = 1,
-        Text = player.Name.." ["..role.."]",
-        TextColor3 = color,
-        TextStrokeTransparency = 0.25,
-        TextStrokeColor3 = Color3.new(0,0,0),
-        TextSize = 13,
-        Font = Enum.Font.GothamBold
+        Size = UDim2.fromScale(1,1), BackgroundTransparency = 1,
+        Text = player.Name.." ["..role.."]", TextColor3 = color,
+        TextStrokeTransparency = 0.25, TextStrokeColor3 = Color3.new(0,0,0),
+        TextSize = 13, Font = Enum.Font.GothamBold
     }, billboard)
-
-    ESPObjects[player] = {
-        Highlight = highlight, Billboard = billboard,
-        Label = label, Character = character
-    }
+    ESPObjects[player] = { Highlight = highlight, Billboard = billboard, Label = label, Character = character }
 end
 
 local function UpdateESP()
@@ -343,8 +316,7 @@ local function UpdateESP()
             local head = character and character:FindFirstChild("Head")
             if head then
                 local objects = ESPObjects[player]
-                if not objects or objects.Character ~= character
-                or not objects.Highlight or not objects.Highlight.Parent then
+                if not objects or objects.Character ~= character or not objects.Highlight or not objects.Highlight.Parent then
                     CreateESP(player)
                 else
                     local role = GetRole(player)
@@ -364,11 +336,8 @@ local function UpdateESP()
 end
 
 local function EnableESP(enabled)
-    if enabled then
-        RefreshRoles(true); UpdateESP()
-    else
-        for player in pairs(ESPObjects) do RemoveESP(player) end
-    end
+    if enabled then RefreshRoles(true); UpdateESP()
+    else for player in pairs(ESPObjects) do RemoveESP(player) end end
 end
 
 -- ESP GUN DROP
@@ -396,17 +365,14 @@ local function UpdateGunDropESP()
     if not drop then return end
     local adornee = GetGunAdornee(drop)
     if not adornee then return end
-
     local highlight = Instance.new("Highlight")
     highlight.Name = "HelloKittyGunDropESP"
     highlight.Adornee = drop
     highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
     highlight.FillColor = Color3.fromRGB(0, 255, 255)
     highlight.OutlineColor = Color3.fromRGB(0, 255, 255)
-    highlight.FillTransparency = 0.35
-    highlight.OutlineTransparency = 0
+    highlight.FillTransparency = 0.35; highlight.OutlineTransparency = 0
     highlight.Parent = ScreenGui
-
     local billboard = Instance.new("BillboardGui")
     billboard.Name = "HelloKittyGunDropLabel"
     billboard.Adornee = adornee
@@ -414,21 +380,13 @@ local function UpdateGunDropESP()
     billboard.StudsOffset = Vector3.new(0, 2.5, 0)
     billboard.AlwaysOnTop = true
     billboard.Parent = ScreenGui
-
     local label = Instance.new("TextLabel")
-    label.Size = UDim2.fromScale(1, 1)
-    label.BackgroundTransparency = 1
-    label.Text = "GUN DROP"
-    label.TextColor3 = Color3.fromRGB(0, 255, 255)
-    label.TextStrokeColor3 = Color3.new(0, 0, 0)
-    label.TextStrokeTransparency = 0.15
-    label.Font = Enum.Font.GothamBold
-    label.TextSize = 14
+    label.Size = UDim2.fromScale(1, 1); label.BackgroundTransparency = 1
+    label.Text = "GUN DROP"; label.TextColor3 = Color3.fromRGB(0, 255, 255)
+    label.TextStrokeColor3 = Color3.new(0, 0, 0); label.TextStrokeTransparency = 0.15
+    label.Font = Enum.Font.GothamBold; label.TextSize = 14
     label.Parent = billboard
-
-    ESPGun.Target = drop
-    ESPGun.Highlight = highlight
-    ESPGun.Billboard = billboard
+    ESPGun.Target = drop; ESPGun.Highlight = highlight; ESPGun.Billboard = billboard
 end
 
 local function EnableGunESP(state)
@@ -458,9 +416,7 @@ end
 local function GetCoinContainer()
     local map = workspace:FindFirstChild("Map")
     local container = map and map:FindFirstChild("CoinContainer")
-    if not container then
-        container = workspace:FindFirstChild("CoinContainer", true)
-    end
+    if not container then container = workspace:FindFirstChild("CoinContainer", true) end
     return container
 end
 
@@ -469,16 +425,13 @@ local function UpdateCoinESP()
         if next(ESPCoins) then RemoveCoinESP() end
         return
     end
-
     local container = GetCoinContainer()
     if not container then
         if next(ESPCoins) then RemoveCoinESP() end
         return
     end
-
     local currentCoins = {}
     local coinCount = 0
-
     for _, coin in ipairs(container:GetDescendants()) do
         if IsCoin(coin) then
             currentCoins[coin] = true
@@ -490,18 +443,14 @@ local function UpdateCoinESP()
                 highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
                 highlight.FillColor = Color3.fromRGB(255, 215, 0)
                 highlight.OutlineColor = Color3.fromRGB(255, 255, 0)
-                highlight.FillTransparency = 0.4
-                highlight.OutlineTransparency = 0
+                highlight.FillTransparency = 0.4; highlight.OutlineTransparency = 0
                 highlight.Parent = ScreenGui
-
                 ESPCoins[coin] = { Highlight = highlight }
             end
         end
     end
-
     CoinCounterFrame.Visible = true
-    CoinCounterText.Text = "🪙 Moedas: " .. coinCount
-
+    CoinCounterText.Text = "💲 Moedas: " .. coinCount
     for coin, objects in pairs(ESPCoins) do
         if not currentCoins[coin] or not coin.Parent then
             if objects.Highlight then objects.Highlight:Destroy() end
@@ -521,9 +470,7 @@ end
 local function IsPlayerCharacterPart(part)
     for _, player in ipairs(Players:GetPlayers()) do
         local character = player.Character
-        if character and part:IsDescendantOf(character) then
-            return true
-        end
+        if character and part:IsDescendantOf(character) then return true end
     end
     return false
 end
@@ -531,41 +478,22 @@ end
 local function ApplyXRay(part)
     if not part:IsA("BasePart") then return end
     if IsPlayerCharacterPart(part) then return end
-
-    if XRayOriginal[part] == nil then
-        XRayOriginal[part] = part.LocalTransparencyModifier
-    end
-
+    if XRayOriginal[part] == nil then XRayOriginal[part] = part.LocalTransparencyModifier end
     part.LocalTransparencyModifier = 0.65
 end
 
 local function EnableXRay(state)
     Settings.XRay = state
-
-    if XRayConnection then
-        XRayConnection:Disconnect()
-        XRayConnection = nil
-    end
-
+    if XRayConnection then XRayConnection:Disconnect(); XRayConnection = nil end
     if state then
-        for _, part in ipairs(workspace:GetDescendants()) do
-            ApplyXRay(part)
-        end
-
+        for _, part in ipairs(workspace:GetDescendants()) do ApplyXRay(part) end
         XRayConnection = workspace.DescendantAdded:Connect(function(part)
-            task.defer(function()
-                if Settings.XRay and part.Parent then
-                    ApplyXRay(part)
-                end
-            end)
+            task.defer(function() if Settings.XRay and part.Parent then ApplyXRay(part) end end)
         end)
     else
         for part, original in pairs(XRayOriginal) do
-            if part and part.Parent then
-                part.LocalTransparencyModifier = original
-            end
+            if part and part.Parent then part.LocalTransparencyModifier = original end
         end
-
         table.clear(XRayOriginal)
     end
 end
@@ -575,30 +503,20 @@ end
 -- ============================================================
 local function EnableFullbright(state)
     Settings.Fullbright = state
-
     if state then
         if not FullbrightOriginal then
             FullbrightOriginal = {
-                ClockTime = Lighting.ClockTime,
-                Brightness = Lighting.Brightness,
-                Ambient = Lighting.Ambient,
-                OutdoorAmbient = Lighting.OutdoorAmbient,
-                GlobalShadows = Lighting.GlobalShadows,
-                ExposureCompensation = Lighting.ExposureCompensation
+                ClockTime = Lighting.ClockTime, Brightness = Lighting.Brightness,
+                Ambient = Lighting.Ambient, OutdoorAmbient = Lighting.OutdoorAmbient,
+                GlobalShadows = Lighting.GlobalShadows, ExposureCompensation = Lighting.ExposureCompensation
             }
         end
-
-        Lighting.ClockTime = 14
-        Lighting.Brightness = 3
-        Lighting.Ambient = Color3.new(1, 1, 1)
-        Lighting.OutdoorAmbient = Color3.new(1, 1, 1)
-        Lighting.GlobalShadows = false
-        Lighting.ExposureCompensation = 0.3
+        Lighting.ClockTime = 14; Lighting.Brightness = 3
+        Lighting.Ambient = Color3.new(1, 1, 1); Lighting.OutdoorAmbient = Color3.new(1, 1, 1)
+        Lighting.GlobalShadows = false; Lighting.ExposureCompensation = 0.3
     else
         if FullbrightOriginal then
-            for property, value in pairs(FullbrightOriginal) do  -- ✅ typo corrigido
-                Lighting[property] = value
-            end
+            for property, value in pairs(FullbrightOriginal) do Lighting[property] = value end
             FullbrightOriginal = nil
         end
     end
@@ -610,9 +528,7 @@ end
 local TeleportStatus
 
 local function SetTPStatus(msg)
-    if TeleportStatus and TeleportStatus.Parent then
-        TeleportStatus.Text = "Status: " .. msg
-    end
+    if TeleportStatus and TeleportStatus.Parent then TeleportStatus.Text = "Status: " .. msg end
 end
 
 local function DoTeleport(targetPos)
@@ -620,7 +536,6 @@ local function DoTeleport(targetPos)
     local root = char and char:FindFirstChild("HumanoidRootPart")
     if not root then SetTPStatus("Personagem não encontrado."); return false end
     if not targetPos then SetTPStatus("Destino inválido."); return false end
-
     local tempNoclip = false
     if not Settings.Noclip then
         tempNoclip = true
@@ -631,9 +546,7 @@ local function DoTeleport(targetPos)
             end
         end
     end
-
     root.CFrame = CFrame.new(targetPos + Vector3.new(0, 3, 0))
-
     if tempNoclip then
         task.delay(0.3, function()
             if not Settings.Noclip then
@@ -644,7 +557,6 @@ local function DoTeleport(targetPos)
             end
         end)
     end
-
     return true
 end
 
@@ -653,34 +565,24 @@ local function TpToPlayer(player)
     local char = player.Character
     local targetRoot = char and char:FindFirstChild("HumanoidRootPart")
     if not targetRoot then SetTPStatus("Jogador não spawnou ainda."); return end
-    if DoTeleport(targetRoot.Position) then
-        SetTPStatus("Teleportado para " .. player.Name .. ".")
-    end
+    if DoTeleport(targetRoot.Position) then SetTPStatus("Teleportado para " .. player.Name .. ".") end
 end
 
 local function TpToMurderer()
-    RefreshRoles(true)
-    task.wait(0.5)
-
+    RefreshRoles(true); task.wait(0.5)
     for _, p in ipairs(Players:GetPlayers()) do
         if p ~= LocalPlayer and GetRole(p) == "Murderer" then
-            TpToPlayer(p)
-            SetTPStatus("TP para o Murderer (" .. p.Name .. ").")
-            return
+            TpToPlayer(p); SetTPStatus("TP para o Murderer (" .. p.Name .. ")."); return
         end
     end
     SetTPStatus("Murderer não encontrado (ou você é o Murderer).")
 end
 
 local function TpToSheriff()
-    RefreshRoles(true)
-    task.wait(0.5)
-
+    RefreshRoles(true); task.wait(0.5)
     for _, p in ipairs(Players:GetPlayers()) do
         if p ~= LocalPlayer and GetRole(p) == "Sheriff" then
-            TpToPlayer(p)
-            SetTPStatus("TP para o Xerife (" .. p.Name .. ").")
-            return
+            TpToPlayer(p); SetTPStatus("TP para o Xerife (" .. p.Name .. ")."); return
         end
     end
     SetTPStatus("Xerife não encontrado (ou você é o Xerife).")
@@ -688,64 +590,45 @@ end
 
 local function TpToLobby()
     local lobbyPos
-
     local lobby = workspace:FindFirstChild("Lobby")
     if not lobby then
         for _, obj in ipairs(workspace:GetDescendants()) do
-            if obj.Name:lower() == "lobby" then
-                lobby = obj
-                break
-            end
+            if obj.Name:lower() == "lobby" then lobby = obj; break end
         end
     end
-
     if lobby then
         if lobby:IsA("Model") then
-            if lobby.PrimaryPart then
-                lobbyPos = lobby.PrimaryPart.Position
+            if lobby.PrimaryPart then lobbyPos = lobby.PrimaryPart.Position
             else
                 local part = lobby:FindFirstChildWhichIsA("BasePart", true)
                 if part then lobbyPos = part.Position end
             end
-        elseif lobby:IsA("BasePart") then
-            lobbyPos = lobby.Position
-        end
+        elseif lobby:IsA("BasePart") then lobbyPos = lobby.Position end
     end
-
     if not lobbyPos then
         local map = workspace:FindFirstChild("Map")
         for _, sl in ipairs(workspace:GetDescendants()) do
             if sl:IsA("SpawnLocation") then
-                if not (map and sl:IsDescendantOf(map)) then
-                    lobbyPos = sl.Position
-                    break
-                end
+                if not (map and sl:IsDescendantOf(map)) then lobbyPos = sl.Position; break end
             end
         end
     end
-
     if not lobbyPos then
         local char = LocalPlayer.Character
         local root = char and char:FindFirstChild("HumanoidRootPart")
         if root then lobbyPos = root.Position end
     end
-
     if not lobbyPos then SetTPStatus("Lobby não encontrado."); return end
     if DoTeleport(lobbyPos) then SetTPStatus("Teleportado para o lobby.") end
 end
 
 local function TpToMap()
     local map = workspace:FindFirstChild("Map")
-
     if not map then
         for _, obj in ipairs(workspace:GetChildren()) do
-            if (obj:IsA("Model") or obj:IsA("Folder")) and obj.Name:lower():find("map") then
-                map = obj
-                break
-            end
+            if (obj:IsA("Model") or obj:IsA("Folder")) and obj.Name:lower():find("map") then map = obj; break end
         end
     end
-
     if not map then
         local biggest, biggestSize = nil, 0
         for _, obj in ipairs(workspace:GetChildren()) do
@@ -757,57 +640,34 @@ local function TpToMap()
                 if not isChar then
                     local _, size = obj:GetBoundingBox()
                     local volume = size.X * size.Y * size.Z
-                    if volume > biggestSize then
-                        biggest, biggestSize = obj, volume
-                    end
+                    if volume > biggestSize then biggest, biggestSize = obj, volume end
                 end
             end
         end
         map = biggest
     end
-
     if not map then SetTPStatus("Mapa do round não encontrado."); return end
-
     local spawnPos
-
     for _, obj in ipairs(map:GetDescendants()) do
-        if obj:IsA("SpawnLocation") then
-            spawnPos = obj.Position
-            break
-        end
+        if obj:IsA("SpawnLocation") then spawnPos = obj.Position; break end
     end
-
-    if not spawnPos and map:IsA("Model") and map.PrimaryPart then
-        spawnPos = map.PrimaryPart.Position
-    end
-
+    if not spawnPos and map:IsA("Model") and map.PrimaryPart then spawnPos = map.PrimaryPart.Position end
     if not spawnPos then
         local part = map:FindFirstChildWhichIsA("BasePart", true)
         if part then spawnPos = part.Position end
     end
-
     if not spawnPos then
         for _, p in ipairs(Players:GetPlayers()) do
             if p ~= LocalPlayer then
                 local c = p.Character
                 local r = c and c:FindFirstChild("HumanoidRootPart")
                 local h = c and c:FindFirstChildOfClass("Humanoid")
-                if r and h and h.Health > 0 then
-                    spawnPos = r.Position
-                    break
-                end
+                if r and h and h.Health > 0 then spawnPos = r.Position; break end
             end
         end
     end
-
-    if not spawnPos then
-        SetTPStatus("Não foi possível localizar um ponto no mapa.")
-        return
-    end
-
-    if DoTeleport(spawnPos) then
-        SetTPStatus("Teleportado para o mapa do round.")
-    end
+    if not spawnPos then SetTPStatus("Não foi possível localizar um ponto no mapa."); return end
+    if DoTeleport(spawnPos) then SetTPStatus("Teleportado para o mapa do round.") end
 end
 
 local function SaveWaypoint()
@@ -823,10 +683,7 @@ local function TpToWaypoint()
     if DoTeleport(SavedWaypoint) then SetTPStatus("Teleportado para o waypoint.") end
 end
 
-local function ClearWaypoint()
-    SavedWaypoint = nil
-    SetTPStatus("Waypoint limpo.")
-end
+local function ClearWaypoint() SavedWaypoint = nil; SetTPStatus("Waypoint limpo.") end
 
 -- ============================================================
 -- UNLOAD
@@ -843,14 +700,19 @@ local function UnloadHub()
     end
     table.clear(OriginalCollision)
 
+    -- ✅ ANTI-FLING (Mario Hub): restaura CanCollide dos outros e desconecta
     Settings.AntiFling = false
     if AntiFlingConnection then AntiFlingConnection:Disconnect(); AntiFlingConnection = nil end
+    for part, orig in pairs(FlingSavedCollide) do
+        if part and part.Parent then part.CanCollide = orig end
+    end
+    table.clear(FlingSavedCollide)
+
     Settings.AntiAfk = false
     if AntiAfkConnection then AntiAfkConnection:Disconnect(); AntiAfkConnection = nil end
     Settings.InfJump = false
     if InfJumpConnection then InfJumpConnection:Disconnect(); InfJumpConnection = nil end
 
-    -- Desconecta loops Stepped guardados
     for _, conn in ipairs(SteppedConnections) do
         if conn then pcall(function() conn:Disconnect() end) end
     end
@@ -861,10 +723,8 @@ local function UnloadHub()
 
     Settings.ESP_Players = false
     for player in pairs(ESPObjects) do RemoveESP(player) end
-    Settings.ESP_Gun = false
-    RemoveGunDropESP()
-    Settings.ESP_Coin = false
-    RemoveCoinESP()
+    Settings.ESP_Gun = false; RemoveGunDropESP()
+    Settings.ESP_Coin = false; RemoveCoinESP()
 
     if ResetAllToggles then ResetAllToggles() end
 
@@ -940,6 +800,7 @@ local VisualsPage = CreatePage("VISUALS")
 local CombatPage = CreatePage("COMBATE")
 local TrollPage = CreatePage("TROLL")
 local TeleportPage = CreatePage("TELEPORTE")
+local FarmPage = CreatePage("FARM")
 local ConfigPage = CreatePage("CONFIGURACAO")
 local AboutPage = CreatePage("ABOUT")
 
@@ -948,6 +809,7 @@ CreateTab("VISUALS","👁  VISUALS")
 CreateTab("COMBATE","🎯  COMBATE")
 CreateTab("TROLL","😈  TROLL")
 CreateTab("TELEPORTE","📍  TELEPORTE")
+CreateTab("FARM","💰  FARM")
 CreateTab("CONFIGURACAO","⚙  CONFIG")
 CreateTab("ABOUT","ℹ  ABOUT")
 SelectPage("PLAYER")
@@ -1002,21 +864,16 @@ local function AddSlider(page,title,setting,minimum,maximum,step)
         end
     end)
     UserInputService.InputChanged:Connect(function(input)
-        if sliderDragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
-            UpdateFromInput(input)
-        end
+        if sliderDragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then UpdateFromInput(input) end
     end)
     UserInputService.InputEnded:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-            sliderDragging = false
-        end
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then sliderDragging = false end
     end)
     table.insert(SliderObjects,{ Frame = frame, Bar = bar, Fill = fill, Knob = knob, Setting = setting, Set = Update, Minimum = minimum, Maximum = maximum, Step = step })
     Update(Settings[setting])
     return frame
 end
 
--- ✅ CreateCustomToggle atualizado: usa Theme em tempo real
 local function CreateCustomToggle(page, title, setting, callback)
     local row = Create("Frame", { Name = "FarmToggleRow", Size = UDim2.new(1,-6,0,34), BackgroundColor3 = Theme.Button, BorderSizePixel = 0 }, page.Rows)
     Create("UICorner", { CornerRadius = UDim.new(0,7) }, row)
@@ -1027,7 +884,6 @@ local function CreateCustomToggle(page, title, setting, callback)
     Create("UICorner", { CornerRadius = UDim.new(1,0) }, knob)
     local hitbox = Create("TextButton", { Name = "ToggleHitbox", Size = UDim2.new(1,0,1,0), BackgroundTransparency = 1, Text = "", AutoButtonColor = false }, row)
     local function updateVisual(enabled)
-        -- ✅ usa Theme global (atualizado pelo ApplyTheme)
         track.BackgroundColor3 = enabled and Theme.Header or Theme.Track
         knob.Position = enabled and UDim2.new(1,-17,0,3) or UDim2.fromOffset(3,3)
     end
@@ -1051,18 +907,50 @@ CreateCustomToggle(PlayerPage, "Noclip","Noclip",function(state)
     end
 end)
 
+-- ✅ ANTI-FLING (Mario Hub): Stepped + GetDescendants + linear&angular + cap + restore
 CreateCustomToggle(PlayerPage, "Anti-Fling","AntiFling",function(state)
+    if AntiFlingConnection then AntiFlingConnection:Disconnect(); AntiFlingConnection = nil end
+
     if state then
-        if AntiFlingConnection then AntiFlingConnection:Disconnect() end
-        AntiFlingConnection = RunService.Heartbeat:Connect(function()
+        AntiFlingConnection = RunService.Stepped:Connect(function()
+            if not Settings.AntiFling then return end
+
+            -- Camada 1: desativa colisão dos outros jogadores (recursivo)
+            for _, player in ipairs(Players:GetPlayers()) do
+                if player == LocalPlayer then continue end
+                local character = player.Character
+                if not character then continue end
+                for _, part in ipairs(character:GetDescendants()) do
+                    if part:IsA("BasePart") and part.CanCollide then
+                        if FlingSavedCollide[part] == nil then
+                            FlingSavedCollide[part] = part.CanCollide
+                        end
+                        part.CanCollide = false
+                    end
+                end
+            end
+
+            -- Camada 2: cap suave em linear e angular
             local char = LocalPlayer.Character
             local root = char and char:FindFirstChild("HumanoidRootPart")
-            if root and root.AssemblyLinearVelocity.Magnitude > 200 then
-                root.AssemblyLinearVelocity = Vector3.zero
+            if not root then return end
+
+            local v = root.AssemblyLinearVelocity
+            if v.Magnitude > Settings.FlingVelocityCap then
+                root.AssemblyLinearVelocity = v.Unit * Settings.FlingVelocityCap
+            end
+
+            local w = root.AssemblyAngularVelocity
+            if w.Magnitude > Settings.FlingAngularCap then
+                root.AssemblyAngularVelocity = w.Unit * Settings.FlingAngularCap
             end
         end)
     else
-        if AntiFlingConnection then AntiFlingConnection:Disconnect(); AntiFlingConnection = nil end
+        -- Restaura CanCollide dos outros jogadores
+        for part, original in pairs(FlingSavedCollide) do
+            if part and part.Parent then part.CanCollide = original end
+        end
+        table.clear(FlingSavedCollide)
     end
 end)
 
@@ -1078,7 +966,6 @@ CreateCustomToggle(PlayerPage, "Anti-AFK","AntiAfk",function(state)
     end
 end)
 
--- ✅ Defaults dinâmicos (capturados do personagem real)
 local DefaultWalkSpeed = 16
 local DefaultJumpPower = 50
 task.spawn(function()
@@ -1184,7 +1071,6 @@ end).LayoutOrder = 10
 local LimitInfJumpToggle = CreateCustomToggle(PlayerPage, "Limitar Inf Jump (2x)","LimitInfJump",function(state) end)
 LimitInfJumpToggle.LayoutOrder = 11
 
--- ✅ Loops Stepped guardados
 table.insert(SteppedConnections, RunService.Stepped:Connect(function()
     local char = LocalPlayer.Character
     local hum = char and char:FindFirstChildOfClass("Humanoid")
@@ -1229,24 +1115,15 @@ CreateCustomToggle(VisualsPage, "FullBright","Fullbright",function(state) Enable
 -- ABA TELEPORTE
 -- ============================================================
 TeleportStatus = Create("TextLabel", {
-    Size = UDim2.new(1,-6,0,34),
-    BackgroundTransparency = 1,
-    Text = "Status: Pronto.",
-    TextColor3 = Theme.Text,
-    TextSize = 10,
-    Font = Enum.Font.Gotham,
-    TextWrapped = true,
-    TextXAlignment = Enum.TextXAlignment.Left
+    Size = UDim2.new(1,-6,0,34), BackgroundTransparency = 1,
+    Text = "Status: Pronto.", TextColor3 = Theme.Text, TextSize = 10,
+    Font = Enum.Font.Gotham, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left
 }, TeleportPage.Rows)
 
 Create("TextLabel", {
-    Size = UDim2.new(1,-6,0,20),
-    BackgroundTransparency = 1,
-    Text = "👤 Teleportar para jogador",
-    TextColor3 = Theme.Text,
-    TextSize = 11,
-    Font = Enum.Font.GothamBold,
-    TextXAlignment = Enum.TextXAlignment.Left
+    Size = UDim2.new(1,-6,0,20), BackgroundTransparency = 1,
+    Text = "👤 Teleportar para jogador", TextColor3 = Theme.Text,
+    TextSize = 11, Font = Enum.Font.GothamBold, TextXAlignment = Enum.TextXAlignment.Left
 }, TeleportPage.Rows)
 
 local PlayerListBtn = AddButton(TeleportPage.Rows, "Selecionar jogador  ▼", function() end)
@@ -1262,13 +1139,9 @@ local function RefreshPlayerList()
     for i, p in ipairs(players) do
         if p ~= LocalPlayer then
             local btn = Create("TextButton", {
-                Size = UDim2.new(1,0,0,26),
-                BackgroundColor3 = Theme.Track,
-                Text = p.Name,
-                TextColor3 = Theme.Text,
-                TextSize = 11,
-                Font = Enum.Font.Gotham,
-                LayoutOrder = i
+                Size = UDim2.new(1,0,0,26), BackgroundColor3 = Theme.Track,
+                Text = p.Name, TextColor3 = Theme.Text, TextSize = 11,
+                Font = Enum.Font.Gotham, LayoutOrder = i
             }, PlayerList)
             Create("UICorner", { CornerRadius = UDim.new(0,6) }, btn)
             btn.MouseButton1Click:Connect(function()
@@ -1290,20 +1163,15 @@ AddButton(TeleportPage.Rows, "📍 Teleportar para jogador selecionado", functio
     if not SelectedPlayer then SetTPStatus("Selecione um jogador primeiro."); return end
     TpToPlayer(SelectedPlayer)
 end)
-
 AddButton(TeleportPage.Rows, "🔪 Teleportar para o Murderer", function() TpToMurderer() end)
 AddButton(TeleportPage.Rows, "🔫 Teleportar para o Xerife", function() TpToSheriff() end)
 AddButton(TeleportPage.Rows, "🚪 Teleportar para o Lobby", function() TpToLobby() end)
 AddButton(TeleportPage.Rows, "🗺 Teleportar para o Mapa (Round)", function() TpToMap() end)
 
 Create("TextLabel", {
-    Size = UDim2.new(1,-6,0,20),
-    BackgroundTransparency = 1,
-    Text = "📌 Waypoint",
-    TextColor3 = Theme.Text,
-    TextSize = 11,
-    Font = Enum.Font.GothamBold,
-    TextXAlignment = Enum.TextXAlignment.Left
+    Size = UDim2.new(1,-6,0,20), BackgroundTransparency = 1,
+    Text = "📌 Waypoint", TextColor3 = Theme.Text,
+    TextSize = 11, Font = Enum.Font.GothamBold, TextXAlignment = Enum.TextXAlignment.Left
 }, TeleportPage.Rows)
 
 AddButton(TeleportPage.Rows, "💾 Salvar waypoint aqui", function() SaveWaypoint() end)
@@ -1320,7 +1188,6 @@ task.spawn(function()
     end
     RemoveGunDropESP()
 end)
-
 task.spawn(function()
     while ScreenGui.Parent do
         if Settings.ESP_Coin then pcall(UpdateCoinESP) end
@@ -1328,14 +1195,12 @@ task.spawn(function()
     end
     RemoveCoinESP()
 end)
-
 task.spawn(function()
     while ScreenGui.Parent do
         if Settings.ESP_Players then pcall(UpdateESP) end
         task.wait(0.5)
     end
 end)
-
 task.spawn(function()
     while ScreenGui.Parent do
         if Settings.ESP_Players then pcall(RefreshRoles, false) end
@@ -1360,12 +1225,7 @@ end)
 if RoundStart and RoundStart:IsA("RemoteEvent") then
     RoundStart.OnClientEvent:Connect(function()
         table.clear(RoleCache)
-
-        -- ✅ NÃO zera mais FullbrightOriginal
-        if Settings.Fullbright then
-            EnableFullbright(true)
-        end
-
+        if Settings.Fullbright then EnableFullbright(true) end
         if Settings.ESP_Players then
             task.delay(0.5, function() RefreshRoles(true); UpdateESP() end)
         end
@@ -1414,7 +1274,6 @@ ApplyTheme = function(name)
             elseif object:IsA("Frame") and (object.Name == "SliderContainer" or object.Name == "FarmToggleRow") then
                 object.BackgroundColor3 = theme.Button
             elseif object:IsA("Frame") and object.Name == "ToggleTrack" then
-                -- ✅ fallback: pega o estado atual do toggle pelo Row pai
                 local enabled = false
                 for key, item in pairs(ToggleButtons) do
                     if item.Row == object.Parent then enabled = Settings[key] == true; break end
@@ -1436,8 +1295,6 @@ ApplyTheme = function(name)
         local stroke = btn:FindFirstChildOfClass("UIStroke")
         if stroke then stroke.Color = color end
     end
-
-    -- ✅ Reaplica tema em todos os toggles (garante cor correta)
     for key, item in pairs(ToggleButtons) do
         if item.Update then item.Update(Settings[key] == true) end
     end
@@ -1528,7 +1385,6 @@ local function LoadConfig(name)
         if Settings[key] == true and item.Callback then pcall(item.Callback, false) end
         Settings[key] = false; item.Update(false)
     end
-
     local order = {
         "AntiFling", "AntiAfk", "Noclip",
         "WalkSpeedEnabled", "JumpPowerEnabled",
@@ -1536,7 +1392,6 @@ local function LoadConfig(name)
         "XRay", "Fullbright",
         "ESP_Players", "ESP_Gun", "ESP_Coin"
     }
-
     for _, key in ipairs(order) do
         local item = ToggleButtons[key]; local value = data.Settings[key]
         if item and type(value) == "boolean" then
