@@ -3,8 +3,11 @@
     Versão: 0.9.8
 
     Alterações v0.9.8:
-    - Anti-Fling portado do Mario Hub (Stepped, GetDescendants, linear+angular, cap, restauração)
+    - Anti-Fling portado do Mario Hub
     - Contador de moedas usa emoji 💲
+    - FIX: TpToMap não teleporta mais para o lobby / fora do mapa
+    - ABOUT: 4 indicadores (47% cada, alinhados à direita) — Indicador 1 = Painel HUB + versão, 2/3/4 vazios
+    - Card criador (94% centralizado)
 ]]
 
 local HUB_NAME = "NOTURNO HUB"
@@ -49,7 +52,6 @@ local Settings = {
     WalkSpeedEnabled = false, JumpPowerEnabled = false,
     ESP_Players = false, ESP_Gun = false, ESP_Coin = false,
     XRay = false, Fullbright = false,
-    -- ✅ ANTI-FLING (Mario Hub)
     FlingVelocityCap = 120,
     FlingAngularCap = 10
 }
@@ -61,7 +63,6 @@ local OriginalCollision = {}
 local InfJumpCount = 0
 local LastJumpTime = 0
 
--- ✅ ANTI-FLING (Mario Hub): guarda CanCollide original para restaurar no off
 local FlingSavedCollide = {}
 
 local SteppedConnections = {}
@@ -622,52 +623,142 @@ local function TpToLobby()
     if DoTeleport(lobbyPos) then SetTPStatus("Teleportado para o lobby.") end
 end
 
+-- ✅ TP PARA O MAPA (FIX v0.9.8)
 local function TpToMap()
-    local map = workspace:FindFirstChild("Map")
-    if not map then
-        for _, obj in ipairs(workspace:GetChildren()) do
-            if (obj:IsA("Model") or obj:IsA("Folder")) and obj.Name:lower():find("map") then map = obj; break end
+    local lobbyPos = nil
+    local lobbyObj = workspace:FindFirstChild("Lobby")
+    if lobbyObj then
+        if lobbyObj:IsA("Model") and lobbyObj.PrimaryPart then
+            lobbyPos = lobbyObj.PrimaryPart.Position
+        else
+            local lp = lobbyObj:FindFirstChildWhichIsA("BasePart", true)
+            if lp then lobbyPos = lp.Position end
         end
     end
-    if not map then
+
+    local bestPlayer, bestDist = nil, 0
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= LocalPlayer then
+            local c = p.Character
+            local r = c and c:FindFirstChild("HumanoidRootPart")
+            local h = c and c:FindFirstChildOfClass("Humanoid")
+            if r and h and h.Health > 0 then
+                local dist = lobbyPos and (r.Position - lobbyPos).Magnitude or 1e9
+                if dist > bestDist then
+                    bestDist = dist
+                    bestPlayer = p
+                end
+            end
+        end
+    end
+
+    if bestPlayer and (not lobbyPos or bestDist > 60) then
+        local r = bestPlayer.Character and bestPlayer.Character:FindFirstChild("HumanoidRootPart")
+        if r and DoTeleport(r.Position) then
+            SetTPStatus("TP para o mapa (via " .. bestPlayer.Name .. ").")
+            return
+        end
+    end
+
+    local mapContainer = workspace:FindFirstChild("Map")
+        or workspace:FindFirstChild("Maps")
+        or workspace:FindFirstChild("CurrentMap")
+
+    if not mapContainer then
+        for _, obj in ipairs(workspace:GetChildren()) do
+            if (obj:IsA("Folder") or obj:IsA("Model"))
+                and obj.Name:lower():find("^map") then
+                mapContainer = obj
+                break
+            end
+        end
+    end
+
+    local mapModel = nil
+    if mapContainer then
+        if mapContainer:IsA("Model") then
+            mapModel = mapContainer
+        elseif mapContainer:IsA("Folder") then
+            for _, child in ipairs(mapContainer:GetChildren()) do
+                if child:IsA("Model") or child:IsA("BasePart") then
+                    mapModel = child
+                    break
+                end
+            end
+        end
+    end
+
+    if not mapModel then
+        local blacklist = {
+            ["Lobby"] = true, ["Players"] = true,
+            ["Terrain"] = true, ["Camera"] = true
+        }
         local biggest, biggestSize = nil, 0
         for _, obj in ipairs(workspace:GetChildren()) do
-            if obj:IsA("Model") then
+            if obj:IsA("Model") and not blacklist[obj.Name] then
                 local isChar = false
                 for _, p in ipairs(Players:GetPlayers()) do
                     if p.Character == obj then isChar = true; break end
                 end
                 if not isChar then
-                    local _, size = obj:GetBoundingBox()
-                    local volume = size.X * size.Y * size.Z
-                    if volume > biggestSize then biggest, biggestSize = obj, volume end
+                    local ok, _, size = pcall(function() return obj:GetBoundingBox() end)
+                    if ok and size then
+                        local volume = size.X * size.Y * size.Z
+                        if volume > biggestSize then
+                            biggest, biggestSize = obj, volume
+                        end
+                    end
                 end
             end
         end
-        map = biggest
+        mapModel = biggest
     end
-    if not map then SetTPStatus("Mapa do round não encontrado."); return end
-    local spawnPos
-    for _, obj in ipairs(map:GetDescendants()) do
-        if obj:IsA("SpawnLocation") then spawnPos = obj.Position; break end
+
+    if not mapModel then
+        SetTPStatus("Mapa não encontrado (você está no lobby?).")
+        return
     end
-    if not spawnPos and map:IsA("Model") and map.PrimaryPart then spawnPos = map.PrimaryPart.Position end
+
+    local spawnPos = nil
+
+    for _, obj in ipairs(mapModel:GetDescendants()) do
+        if obj:IsA("SpawnLocation") and obj.Transparency < 1 then
+            spawnPos = obj.Position
+            break
+        end
+    end
+
     if not spawnPos then
-        local part = map:FindFirstChildWhichIsA("BasePart", true)
-        if part then spawnPos = part.Position end
-    end
-    if not spawnPos then
-        for _, p in ipairs(Players:GetPlayers()) do
-            if p ~= LocalPlayer then
-                local c = p.Character
-                local r = c and c:FindFirstChild("HumanoidRootPart")
-                local h = c and c:FindFirstChildOfClass("Humanoid")
-                if r and h and h.Health > 0 then spawnPos = r.Position; break end
+        for _, obj in ipairs(mapModel:GetDescendants()) do
+            if obj.Name == "HumanoidRootPart" and obj:IsA("BasePart") then
+                spawnPos = obj.Position
+                break
             end
         end
     end
-    if not spawnPos then SetTPStatus("Não foi possível localizar um ponto no mapa."); return end
-    if DoTeleport(spawnPos) then SetTPStatus("Teleportado para o mapa do round.") end
+
+    if not spawnPos and mapModel:IsA("Model") and mapModel.PrimaryPart then
+        local pp = mapModel.PrimaryPart
+        if pp.Position.Y > -50 then
+            spawnPos = pp.Position
+        end
+    end
+
+    if not spawnPos then
+        local ok, cf, size = pcall(function() return mapModel:GetBoundingBox() end)
+        if ok and cf and size then
+            spawnPos = cf.Position + Vector3.new(0, size.Y * 0.4, 0)
+        end
+    end
+
+    if not spawnPos then
+        SetTPStatus("Não foi possível localizar um ponto no mapa.")
+        return
+    end
+
+    if DoTeleport(spawnPos) then
+        SetTPStatus("Teleportado para o mapa do round.")
+    end
 end
 
 local function SaveWaypoint()
@@ -700,7 +791,6 @@ local function UnloadHub()
     end
     table.clear(OriginalCollision)
 
-    -- ✅ ANTI-FLING (Mario Hub): restaura CanCollide dos outros e desconecta
     Settings.AntiFling = false
     if AntiFlingConnection then AntiFlingConnection:Disconnect(); AntiFlingConnection = nil end
     for part, orig in pairs(FlingSavedCollide) do
@@ -907,15 +997,12 @@ CreateCustomToggle(PlayerPage, "Noclip","Noclip",function(state)
     end
 end)
 
--- ✅ ANTI-FLING (Mario Hub): Stepped + GetDescendants + linear&angular + cap + restore
 CreateCustomToggle(PlayerPage, "Anti-Fling","AntiFling",function(state)
     if AntiFlingConnection then AntiFlingConnection:Disconnect(); AntiFlingConnection = nil end
 
     if state then
         AntiFlingConnection = RunService.Stepped:Connect(function()
             if not Settings.AntiFling then return end
-
-            -- Camada 1: desativa colisão dos outros jogadores (recursivo)
             for _, player in ipairs(Players:GetPlayers()) do
                 if player == LocalPlayer then continue end
                 local character = player.Character
@@ -929,24 +1016,19 @@ CreateCustomToggle(PlayerPage, "Anti-Fling","AntiFling",function(state)
                     end
                 end
             end
-
-            -- Camada 2: cap suave em linear e angular
             local char = LocalPlayer.Character
             local root = char and char:FindFirstChild("HumanoidRootPart")
             if not root then return end
-
             local v = root.AssemblyLinearVelocity
             if v.Magnitude > Settings.FlingVelocityCap then
                 root.AssemblyLinearVelocity = v.Unit * Settings.FlingVelocityCap
             end
-
             local w = root.AssemblyAngularVelocity
             if w.Magnitude > Settings.FlingAngularCap then
                 root.AssemblyAngularVelocity = w.Unit * Settings.FlingAngularCap
             end
         end)
     else
-        -- Restaura CanCollide dos outros jogadores
         for part, original in pairs(FlingSavedCollide) do
             if part and part.Parent then part.CanCollide = original end
         end
@@ -1235,12 +1317,161 @@ end
 -- ============================================================
 -- ABA ABOUT
 -- ============================================================
-local AboutRow = Create("Frame", { Size = UDim2.new(1,-12,0,0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1 }, AboutPage.Rows)
-local AboutLeft = Create("Frame", { Size = UDim2.new(0.47,0,0,65), Position = UDim2.new(0.01,0,0,0), BackgroundColor3 = Theme.Button, BorderSizePixel = 0 }, AboutRow)
-Create("UICorner", { CornerRadius = UDim.new(0,8) }, AboutLeft)
-local AboutStroke = Create("UIStroke", { Color = Theme.Accent, Thickness = 1.2, Transparency = 0.5 }, AboutLeft)
-local AboutTitle = Create("TextLabel", { Size = UDim2.new(1,0,0,40), BackgroundTransparency = 1, Text = "🌙 Painel HUB", TextColor3 = Theme.Text, TextSize = 15, Font = Enum.Font.GothamBold }, AboutLeft)
-local AboutVersion = Create("TextLabel", { Size = UDim2.new(1,0,0,20), Position = UDim2.new(0,0,0,35), BackgroundTransparency = 1, Text = "Versão: " .. HUB_VERSION, TextColor3 = Theme.Accent, TextSize = 12, Font = Enum.Font.GothamBold }, AboutLeft)
+
+-- Função helper: cria 1 card "Indicador N" com 47% de largura
+-- Indicador 1 = Painel HUB + versão
+-- Indicadores 2/3/4 = vazios
+local function CreateVersionIndicator(index, layoutOrder)
+    local card = Create("Frame", {
+        Size = UDim2.new(0.47,0,0,70),
+        BackgroundColor3 = Theme.Button,
+        BorderSizePixel = 0,
+        LayoutOrder = layoutOrder or index
+    }, AboutPage.Rows)
+    Create("UICorner", { CornerRadius = UDim.new(0,8) }, card)
+    local stroke = Create("UIStroke", { Color = Theme.Accent, Thickness = 1.2, Transparency = 0.5 }, card)
+
+    local title = nil
+    local value = nil
+
+    if index == 1 then
+        title = Create("TextLabel", {
+            Size = UDim2.new(1,0,0,26),
+            Position = UDim2.fromOffset(0,12),
+            BackgroundTransparency = 1,
+            Text = "🌙 Painel HUB",
+            TextColor3 = Theme.Text,
+            TextSize = 14,
+            Font = Enum.Font.GothamBold,
+            TextXAlignment = Enum.TextXAlignment.Center
+        }, card)
+
+        value = Create("TextLabel", {
+            Size = UDim2.new(1,0,0,20),
+            Position = UDim2.fromOffset(0,38),
+            BackgroundTransparency = 1,
+            Text = "Versão: " .. HUB_VERSION,
+            TextColor3 = Theme.Accent,
+            TextSize = 12,
+            Font = Enum.Font.GothamBold,
+            TextXAlignment = Enum.TextXAlignment.Center
+        }, card)
+    end
+
+    return card, stroke, title, value
+end
+
+-- Linha 1: Indicador 1 + Indicador 2 (alinhados à direita)
+local AboutRow1 = Create("Frame", {
+    Size = UDim2.new(1,-12,0,70),
+    BackgroundTransparency = 1,
+    LayoutOrder = 900
+}, AboutPage.Rows)
+Create("UIListLayout", {
+    FillDirection = Enum.FillDirection.Horizontal,
+    HorizontalAlignment = Enum.HorizontalAlignment.Right,
+    Padding = UDim.new(0,8),
+    SortOrder = Enum.SortOrder.LayoutOrder
+}, AboutRow1)
+
+local VerCard1, VerStroke1, VerTitle1, VerValue1 = CreateVersionIndicator(1, 1)
+VerCard1.Parent = AboutRow1
+local VerCard2, VerStroke2, VerTitle2, VerValue2 = CreateVersionIndicator(2, 2)
+VerCard2.Parent = AboutRow1
+
+-- Linha 2: Indicador 3 + Indicador 4 (alinhados à direita)
+local AboutRow2 = Create("Frame", {
+    Size = UDim2.new(1,-12,0,70),
+    BackgroundTransparency = 1,
+    LayoutOrder = 901
+}, AboutPage.Rows)
+Create("UIListLayout", {
+    FillDirection = Enum.FillDirection.Horizontal,
+    HorizontalAlignment = Enum.HorizontalAlignment.Right,
+    Padding = UDim.new(0,8),
+    SortOrder = Enum.SortOrder.LayoutOrder
+}, AboutRow2)
+
+local VerCard3, VerStroke3, VerTitle3, VerValue3 = CreateVersionIndicator(3, 3)
+VerCard3.Parent = AboutRow2
+local VerCard4, VerStroke4, VerTitle4, VerValue4 = CreateVersionIndicator(4, 4)
+VerCard4.Parent = AboutRow2
+
+-- ============================================================
+-- ✅ CRIADOR (card com avatar + nick + ID) — 94% centralizado
+-- ============================================================
+local CREATOR_ID   = 493241893
+local CREATOR_NAME = "Guilherme_FOX123"
+
+Create("Frame", { Size = UDim2.new(1,0,0,10), BackgroundTransparency = 1, LayoutOrder = 902 }, AboutPage.Rows)
+
+-- Wrapper pra centralizar o card de 94%
+local CreatorWrapper = Create("Frame", {
+    Size = UDim2.new(1,-12,0,80),
+    BackgroundTransparency = 1,
+    LayoutOrder = 903
+}, AboutPage.Rows)
+
+local CreatorCard = Create("Frame", {
+    Size = UDim2.new(0.94,0,1,0),
+    Position = UDim2.new(0.03,0,0,0),
+    BackgroundColor3 = Theme.Header,
+    BorderSizePixel = 0
+}, CreatorWrapper)
+Create("UICorner", { CornerRadius = UDim.new(0,10) }, CreatorCard)
+local CreatorStroke = Create("UIStroke", { Color = Theme.Accent, Thickness = 1.2, Transparency = 0.4 }, CreatorCard)
+
+-- Avatar
+local AvatarFrame = Create("Frame", {
+    Size = UDim2.fromOffset(60,60),
+    Position = UDim2.fromOffset(10,10),
+    BackgroundColor3 = Theme.Main,
+    BorderSizePixel = 0
+}, CreatorCard)
+Create("UICorner", { CornerRadius = UDim.new(1,0) }, AvatarFrame)
+local AvatarStroke = Create("UIStroke", { Color = Theme.Accent, Thickness = 1.5, Transparency = 0.3 }, AvatarFrame)
+
+local AvatarImage = Create("ImageLabel", {
+    Size = UDim2.fromScale(1,1),
+    BackgroundTransparency = 1,
+    Image = "rbxthumb://type=AvatarHeadShot&id=" .. CREATOR_ID .. "&w=150&h=150",
+    ScaleType = Enum.ScaleType.Fit
+}, AvatarFrame)
+Create("UICorner", { CornerRadius = UDim.new(1,0) }, AvatarImage)
+
+-- Info
+local CreatorTitle = Create("TextLabel", {
+    Size = UDim2.new(1,-85,0,18),
+    Position = UDim2.fromOffset(80,10),
+    BackgroundTransparency = 1,
+    Text = "👑  Criador",
+    TextColor3 = Theme.Accent,
+    TextSize = 11,
+    Font = Enum.Font.GothamBold,
+    TextXAlignment = Enum.TextXAlignment.Left
+}, CreatorCard)
+
+local CreatorName = Create("TextLabel", {
+    Size = UDim2.new(1,-85,0,24),
+    Position = UDim2.fromOffset(80,30),
+    BackgroundTransparency = 1,
+    Text = CREATOR_NAME,
+    TextColor3 = Theme.Text,
+    TextSize = 17,
+    Font = Enum.Font.GothamBold,
+    TextXAlignment = Enum.TextXAlignment.Left
+}, CreatorCard)
+
+local CreatorId = Create("TextLabel", {
+    Size = UDim2.new(1,-85,0,16),
+    Position = UDim2.fromOffset(80,56),
+    BackgroundTransparency = 1,
+    Text = "ID: " .. tostring(CREATOR_ID),
+    TextColor3 = Theme.Accent,
+    TextSize = 10,
+    Font = Enum.Font.Gotham,
+    TextXAlignment = Enum.TextXAlignment.Left
+}, CreatorCard)
 
 -- ============================================================
 -- TEMAS
@@ -1286,8 +1517,29 @@ ApplyTheme = function(name)
             end
         end
     end
-    AboutLeft.BackgroundColor3 = theme.Button; AboutStroke.Color = theme.Accent
-    AboutTitle.TextColor3 = theme.Text; AboutVersion.TextColor3 = theme.Accent
+    -- ✅ INDICADORES
+    if VerCard1 then VerCard1.BackgroundColor3 = theme.Button end
+    if VerStroke1 then VerStroke1.Color = theme.Accent end
+    if VerTitle1 then VerTitle1.TextColor3 = theme.Text end
+    if VerValue1 then VerValue1.TextColor3 = theme.Accent end
+
+    if VerCard2 then VerCard2.BackgroundColor3 = theme.Button end
+    if VerStroke2 then VerStroke2.Color = theme.Accent end
+    if VerCard3 then VerCard3.BackgroundColor3 = theme.Button end
+    if VerStroke3 then VerStroke3.Color = theme.Accent end
+    if VerCard4 then VerCard4.BackgroundColor3 = theme.Button end
+    if VerStroke4 then VerStroke4.Color = theme.Accent end
+
+    -- ✅ CRIADOR
+    if CreatorCard then
+        CreatorCard.BackgroundColor3 = theme.Header
+        if CreatorStroke then CreatorStroke.Color = theme.Accent end
+    end
+    if AvatarFrame then AvatarFrame.BackgroundColor3 = theme.Main end
+    if AvatarStroke then AvatarStroke.Color = theme.Accent end
+    if CreatorTitle then CreatorTitle.TextColor3 = theme.Accent end
+    if CreatorName then CreatorName.TextColor3 = theme.Text end
+    if CreatorId then CreatorId.TextColor3 = theme.Accent end
     if ThemeSelector then ThemeSelector.Text = "Tema: " .. name .. "  ▼" end
     for tName,btn in pairs(ThemeOptionButtons) do
         local color = ThemePreviews[tName] or theme.Button
