@@ -1,33 +1,24 @@
---[[ NOTURNO HUB - EXTENSÃO: ABA COMBATE
-     Versão: 2.8
+--[[
+    NOTURNO HUB - EXTENSÃO: ABA COMBATE
+     Versão: 0.3.0
      Requer: NOTURNO HUB v0.9.6+ já carregado
-     
-     Novidades v2.8:
-       ✅ Kill Aura adicionado (coluna Murderer)
-       ✅ Kill Aura Range (slider 5–30 studs)
-       ✅ Stabba TODOS os jogadores no raio, não só o que você mira
-       ✅ Só ativa se você tiver a faca (Knife)
-       ✅ Delay anti-detect entre stabs (0.15s)
-       
-     Layout:
-       🟦 ESQUERDA (Sheriff/Hero/Innocent):
-          - Aim Assist (só Murderer, sem Shift Lock)
-          - Auto Shot (Murderer)
-          - Auto Grab Gun (volta pra posição original)
-          - 🎯 Botão Flutuante Shot
-          - 🔫 Botão Flutuante Grab Gun
-       🟥 DIREITA (Murderer):
-          - Hitbox Expander
-          - Hitbox Size
-          - 🩸 Kill Aura              ← NOVO
-          - Kill Aura Range           ← NOVO
-          - Auto Kill All
-          - 🔪 Botão Flutuante Kill All
-       ❌ Auto Win (removido)
+
+     Novidades v0.3.0:
+       ✅ Injeta versão 0.2.9 na aba ABOUT do hub automaticamente
+       ✅ Detecta slot vazio (Indicador 2, 3 ou 4) e preenche
+       ✅ Cria card novo se não houver slot vazio
+       ✅ Remove ao desexecutar
+
+     Novidades v0.2.9 (mantidas):
+       ✅ Kill Aura NoTP (não teleporta)
+       ✅ IsBusy separado (Stab / Grab / Shot)
+       ✅ Verificação de alvo vivo
+       ✅ task.cancel nos loops
+       ✅ Kill Aura Range configurável
 ]]
 
 local HUB_NAME = "NOTURNO HUB"
-local EXT_VERSION = "2.8"
+local EXT_VERSION = "0.2.9"
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -86,6 +77,8 @@ end
 local Main = ScreenGui:FindFirstChild("Main")
 local PagesContainer = Main and Main:FindFirstChild("PagesContainer")
 local CombatPage = PagesContainer and PagesContainer:FindFirstChild("COMBATE")
+local AboutPage = PagesContainer and PagesContainer:FindFirstChild("ABOUT")
+
 if not CombatPage then
     warn("[" .. HUB_NAME .. "] Aba COMBATE não encontrada.")
     return
@@ -132,8 +125,8 @@ local CombatState = {
     AimAssist = false,
     HitboxExpander = false,
     HitboxSize = 4,
-    KillAura = false,        -- NOVO
-    KillAuraRange = 10,      -- NOVO
+    KillAura = false,
+    KillAuraRange = 10,
     AutoShot = false,
     AutoGrab = false,
     AutoKill = false,
@@ -143,11 +136,167 @@ local CombatState = {
 }
 
 local CombatConnections = {}
-local IsBusy = false
 local AllUIElements = {}
+
+local IsBusyStab = false
+local IsBusyGrab = false
+local IsBusyShot = false
+
+local KillAuraTask = nil
+local AutoShotTask = nil
+local AutoGrabTask = nil
+local AutoKillTask = nil
+
+-- ABOUT state
+local AboutCard = nil
+local AboutCardStroke = nil
+local AboutTitle = nil
+local AboutVersion = nil
 
 local function Register(entry) table.insert(AllUIElements, entry) end
 
+-- ============================================================
+-- ✅ INJEÇÃO NA ABA ABOUT
+-- ============================================================
+local function FindAboutRows()
+    if not AboutPage then
+        AboutPage = PagesContainer and PagesContainer:FindFirstChild("ABOUT")
+    end
+    if not AboutPage then return nil end
+    return AboutPage:FindFirstChild("Rows")
+end
+
+local function FindEmptySlotInRows(rows)
+    if not rows then return nil end
+    -- Procura linhas horizontais (AboutRow1, AboutRow2)
+    local lines = {}
+    for _, child in ipairs(rows:GetChildren()) do
+        if child:IsA("Frame") then
+            local layout = child:FindFirstChildOfClass("UIListLayout")
+            if layout and layout.FillDirection == Enum.FillDirection.Horizontal then
+                table.insert(lines, child)
+            end
+        end
+    end
+    table.sort(lines, function(a,b) return a.LayoutOrder < b.LayoutOrder end)
+
+    -- Varre cada card, procura vazio (sem TextLabel com texto)
+    for _, line in ipairs(lines) do
+        for _, card in ipairs(line:GetChildren()) do
+            if card:IsA("Frame") then
+                local hasText = false
+                for _, desc in ipairs(card:GetDescendants()) do
+                    if desc:IsA("TextLabel") and desc.Text and desc.Text ~= "" then
+                        hasText = true
+                        break
+                    end
+                end
+                if not hasText then
+                    return card
+                end
+            end
+        end
+    end
+    return nil
+end
+
+local function CreateAboutCard(rows)
+    if not rows then return nil end
+    local card = Create("Frame", {
+        Size = UDim2.new(0.47,0,0,70),
+        BackgroundColor3 = Theme.Button,
+        BorderSizePixel = 0,
+        LayoutOrder = 950,
+    }, rows)
+    Create("UICorner", { CornerRadius = UDim.new(0,8) }, card)
+    local stroke = Create("UIStroke", { Color = Theme.Accent, Thickness = 1.2, Transparency = 0.5 }, card)
+    return card, stroke
+end
+
+local function FillAboutCard(card, stroke)
+    if not card or not card.Parent then return end
+    -- Limpa filhos (caso já existam placeholders)
+    for _, child in ipairs(card:GetChildren()) do
+        if child:IsA("TextLabel") then child:Destroy() end
+    end
+
+    AboutTitle = Create("TextLabel", {
+        Size = UDim2.new(1,0,0,26),
+        Position = UDim2.fromOffset(0,12),
+        BackgroundTransparency = 1,
+        Text = "🎯 Combate",
+        TextColor3 = Theme.Text,
+        TextSize = 14,
+        Font = Enum.Font.GothamBold,
+        TextXAlignment = Enum.TextXAlignment.Center
+    }, card)
+
+    AboutVersion = Create("TextLabel", {
+        Size = UDim2.new(1,0,0,20),
+        Position = UDim2.fromOffset(0,38),
+        BackgroundTransparency = 1,
+        Text = "Versão: " .. EXT_VERSION,
+        TextColor3 = Theme.Accent,
+        TextSize = 12,
+        Font = Enum.Font.GothamBold,
+        TextXAlignment = Enum.TextXAlignment.Center
+    }, card)
+
+    AboutCard = card
+    AboutCardStroke = stroke
+end
+
+local function InjectAboutVersion()
+    local rows = FindAboutRows()
+    if not rows then return end
+
+    -- Já foi injetado? Só atualiza versão
+    if AboutCard and AboutCard.Parent then
+        if AboutVersion and AboutVersion.Parent then
+            AboutVersion.Text = "Versão: " .. EXT_VERSION
+            AboutVersion.TextColor3 = Theme.Accent
+        end
+        if AboutTitle and AboutTitle.Parent then
+            AboutTitle.TextColor3 = Theme.Text
+        end
+        if AboutCardStroke and AboutCardStroke.Parent then
+            AboutCardStroke.Color = Theme.Accent
+        end
+        if AboutCard then AboutCard.BackgroundColor3 = Theme.Button end
+        return
+    end
+
+    -- Procura slot vazio
+    local slot = FindEmptySlotInRows(rows)
+    local stroke
+    if slot then
+        -- Usa o slot vazio existente (procura stroke dele)
+        stroke = slot:FindFirstChildOfClass("UIStroke")
+        FillAboutCard(slot, stroke)
+        print("[" .. HUB_NAME .. "] Indicador de Combate injetado em slot existente.")
+    else
+        -- Cria card novo
+        local newCard, newStroke = CreateAboutCard(rows)
+        if newCard then
+            FillAboutCard(newCard, newStroke)
+            print("[" .. HUB_NAME .. "] Indicador de Combate criado em novo card.")
+        end
+    end
+end
+
+local function RemoveAboutInjection()
+    if AboutCard and AboutCard.Parent then
+        AboutCard:Destroy()
+    end
+    AboutCard = nil
+    AboutCardStroke = nil
+    AboutTitle = nil
+    AboutVersion = nil
+end
+
+-- ============================================================
+-- APLICAÇÃO DE TEMA
+-- ============================================================
 local function ApplyThemeToEntry(entry)
     local o = entry.Obj
     if not o or not o.Parent then return end
@@ -181,6 +330,19 @@ end
 local function ReapplyTheme()
     for _, entry in ipairs(AllUIElements) do
         pcall(ApplyThemeToEntry, entry)
+    end
+    -- Re-aplica no ABOUT
+    if AboutCard and AboutCard.Parent then
+        AboutCard.BackgroundColor3 = Theme.Button
+    end
+    if AboutCardStroke and AboutCardStroke.Parent then
+        AboutCardStroke.Color = Theme.Accent
+    end
+    if AboutTitle and AboutTitle.Parent then
+        AboutTitle.TextColor3 = Theme.Text
+    end
+    if AboutVersion and AboutVersion.Parent then
+        AboutVersion.TextColor3 = Theme.Accent
     end
 end
 
@@ -285,18 +447,18 @@ end
 -- AUTO GRAB GUN
 -- ============================================================
 local function AutoGrabGun()
-    if IsBusy then return end
-    IsBusy = true
+    if IsBusyGrab then return end
+    IsBusyGrab = true
     local myRoot = GetRoot(LocalPlayer)
-    if not myRoot then IsBusy = false; return end
+    if not myRoot then IsBusyGrab = false; return end
     local dropObj = FindGunDrop()
     if not dropObj then
         print("[GrabGun] GunDrop não encontrado.")
-        IsBusy = false
+        IsBusyGrab = false
         return
     end
     local part = GetBasePart(dropObj)
-    if not part then IsBusy = false; return end
+    if not part then IsBusyGrab = false; return end
 
     local savedCFrame = myRoot.CFrame
     myRoot.CFrame = CFrame.new(part.Position + Vector3.new(0, 2, 0))
@@ -325,7 +487,7 @@ local function AutoGrabGun()
         myRoot.CFrame = savedCFrame
         myRoot.AssemblyLinearVelocity = Vector3.zero
     end
-    IsBusy = false
+    IsBusyGrab = false
 end
 
 -- ============================================================
@@ -352,13 +514,13 @@ local function ShootTarget(targetPlayer)
 end
 
 local function AutoShootMurderer()
-    if IsBusy then return false, false end
-    IsBusy = true
+    if IsBusyShot then return false, false end
+    IsBusyShot = true
     local m = GetMurderer()
-    if not m then IsBusy = false; return false, true end
+    if not m then IsBusyShot = false; return false, true end
     local myRoot = GetRoot(LocalPlayer)
     local tRoot = GetRoot(m)
-    if not myRoot or not tRoot then IsBusy = false; return false, false end
+    if not myRoot or not tRoot then IsBusyShot = false; return false, false end
     local home = myRoot.CFrame
     myRoot.CFrame = tRoot.CFrame * CFrame.new(0,0,5)
     myRoot.AssemblyLinearVelocity = Vector3.zero
@@ -371,15 +533,20 @@ local function AutoShootMurderer()
         myRoot.CFrame = home
         myRoot.AssemblyLinearVelocity = Vector3.zero
     end
-    IsBusy = false
+    IsBusyShot = false
     return ok, dead
 end
 
 local function StabTarget(targetPlayer)
+    if IsBusyStab then return false end
+    IsBusyStab = true
     local knife = GetKnife()
     local myRoot = GetRoot(LocalPlayer)
     local tRoot = GetRoot(targetPlayer)
-    if not knife or not myRoot or not tRoot then return false end
+    if not knife or not myRoot or not tRoot then
+        IsBusyStab = false
+        return false
+    end
     local hum = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
     if knife.Parent ~= LocalPlayer.Character and hum then
         pcall(function() hum:EquipTool(knife) end)
@@ -389,15 +556,56 @@ local function StabTarget(targetPlayer)
     myRoot.AssemblyLinearVelocity = Vector3.zero
     task.wait(0.1)
     local events = knife:FindFirstChild("Events")
-    if not events then return false end
+    if not events then
+        IsBusyStab = false
+        return false
+    end
+    local fired = false
     for _, n in ipairs({"KnifeStabbed","Stab","Slash","Attack","KnifeAttack"}) do
         local ev = events:FindFirstChild(n)
         if ev and ev:IsA("RemoteEvent") then
             pcall(function() ev:FireServer() end)
+            fired = true
             break
         end
     end
     task.wait(0.05)
+    if not fired then
+        for _, n in ipairs({"HandleTouched","Touched","Hit"}) do
+            local ev = events:FindFirstChild(n)
+            if ev and ev:IsA("RemoteEvent") then
+                pcall(function() ev:FireServer(tRoot) end)
+                fired = true
+                break
+            end
+        end
+    end
+    IsBusyStab = false
+    return fired
+end
+
+local function StabTargetNoTP(targetPlayer)
+    local knife = GetKnife()
+    if not knife then return false end
+    local tRoot = GetRoot(targetPlayer)
+    if not tRoot then return false end
+
+    local hum = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+    if knife.Parent ~= LocalPlayer.Character and hum then
+        pcall(function() hum:EquipTool(knife) end)
+        task.wait(0.05)
+    end
+
+    local events = knife:FindFirstChild("Events")
+    if not events then return false end
+
+    for _, n in ipairs({"KnifeStabbed","Stab","Slash","Attack","KnifeAttack"}) do
+        local ev = events:FindFirstChild(n)
+        if ev and ev:IsA("RemoteEvent") then
+            pcall(function() ev:FireServer(tRoot) end)
+            return true
+        end
+    end
     for _, n in ipairs({"HandleTouched","Touched","Hit"}) do
         local ev = events:FindFirstChild(n)
         if ev and ev:IsA("RemoteEvent") then
@@ -409,11 +617,7 @@ local function StabTarget(targetPlayer)
 end
 
 -- ============================================================
--- 🩸 KILL AURA (NOVO)
--- ------------------------------------------------------------
--- Stabba TODOS os jogadores dentro do raio configurado.
--- Não teleporta — aplica o stab direto na posição do alvo.
--- Só roda se o LocalPlayer tiver a faca.
+-- KILL AURA
 -- ============================================================
 local function RunKillAura()
     if not CombatState.KillAura then return end
@@ -433,7 +637,7 @@ local function RunKillAura()
             if tRoot and hum and hum.Health > 0 then
                 local dist = (tRoot.Position - myPos).Magnitude
                 if dist <= range then
-                    pcall(StabTarget, p)
+                    pcall(StabTargetNoTP, p)
                     task.wait(0.15)
                 end
             end
@@ -441,20 +645,23 @@ local function RunKillAura()
     end
 end
 
+-- ============================================================
+-- LOOPS
+-- ============================================================
 local function StartKillAura()
-    task.spawn(function()
+    if KillAuraTask then pcall(function() task.cancel(KillAuraTask) end); KillAuraTask = nil end
+    KillAuraTask = task.spawn(function()
         while CombatState.KillAura and ScreenGui.Parent do
             pcall(RunKillAura)
             task.wait(0.25)
         end
+        KillAuraTask = nil
     end)
 end
 
--- ============================================================
--- LOOPS AUTO
--- ============================================================
 local function StartAutoShot()
-    task.spawn(function()
+    if AutoShotTask then pcall(function() task.cancel(AutoShotTask) end); AutoShotTask = nil end
+    AutoShotTask = task.spawn(function()
         while CombatState.AutoShot and ScreenGui.Parent do
             pcall(function()
                 local m = GetMurderer()
@@ -462,18 +669,24 @@ local function StartAutoShot()
             end)
             task.wait(0.5)
         end
+        AutoShotTask = nil
     end)
 end
+
 local function StartAutoGrab()
-    task.spawn(function()
+    if AutoGrabTask then pcall(function() task.cancel(AutoGrabTask) end); AutoGrabTask = nil end
+    AutoGrabTask = task.spawn(function()
         while CombatState.AutoGrab and ScreenGui.Parent do
             pcall(AutoGrabGun)
             task.wait(2)
         end
+        AutoGrabTask = nil
     end)
 end
+
 local function StartAutoKill()
-    task.spawn(function()
+    if AutoKillTask then pcall(function() task.cancel(AutoKillTask) end); AutoKillTask = nil end
+    AutoKillTask = task.spawn(function()
         while CombatState.AutoKill and ScreenGui.Parent do
             pcall(function()
                 if GetKnife() then
@@ -486,6 +699,7 @@ local function StartAutoKill()
             end)
             task.wait(1)
         end
+        AutoKillTask = nil
     end)
 end
 
@@ -892,7 +1106,7 @@ AddToggle(LeftCol, "🔫 Botão Flutuante Grab Gun", false, function(state)
 end, 6)
 
 -- ============================================================
--- INJEÇÃO — DIREITA (Murderer) ← KILL AURA AQUI
+-- INJEÇÃO — DIREITA
 -- ============================================================
 AddHeader(RightCol, "🔪 MURDERER", 1)
 
@@ -906,7 +1120,6 @@ AddSlider(RightCol, "Hitbox Size", 4, 2, 20, 1, function(val)
     if CombatState.HitboxExpander then UpdateHitboxes() end
 end, 3)
 
--- 🩸 NOVO: Kill Aura
 AddToggle(RightCol, "🩸 Kill Aura", false, function(state)
     CombatState.KillAura = state
     if state then StartKillAura() end
@@ -926,6 +1139,14 @@ AddToggle(RightCol, "🔪 Botão Flutuante Kill All", false, function(state)
     if state then CreateFloatingKill()
     elseif FloatingBtnKill then FloatingBtnKill:Destroy(); FloatingBtnKill = nil end
 end, 7)
+
+-- ============================================================
+-- ✅ INJETA A VERSÃO NO ABOUT
+-- ============================================================
+task.spawn(function()
+    task.wait(0.5)  -- dá tempo pro hub montar o ABOUT
+    pcall(InjectAboutVersion)
+end)
 
 -- ============================================================
 -- LOOPS
@@ -952,6 +1173,22 @@ task.spawn(function()
     end
 end)
 
+-- Garante que o ABOUT continua com a versão correta
+task.spawn(function()
+    while ScreenGui.Parent do
+        pcall(function()
+            if not AboutCard or not AboutCard.Parent then
+                InjectAboutVersion()
+            elseif AboutVersion and AboutVersion.Parent then
+                if AboutVersion.Text ~= "Versão: " .. EXT_VERSION then
+                    AboutVersion.Text = "Versão: " .. EXT_VERSION
+                end
+            end
+        end)
+        task.wait(3)
+    end
+end)
+
 -- ============================================================
 -- ROUNDSTART
 -- ============================================================
@@ -963,6 +1200,7 @@ if RoundStart and RoundStart:IsA("RemoteEvent") then
         if CombatState.FloatShot and not FloatingBtnShot then CreateFloatingShot() end
         if CombatState.FloatGrab and not FloatingBtnGrab then CreateFloatingGrab() end
         if CombatState.FloatKill and not FloatingBtnKill then CreateFloatingKill() end
+        pcall(InjectAboutVersion)
     end)
 end
 
@@ -984,6 +1222,12 @@ ScreenGui.AncestryChanged:Connect(function()
         CombatState.AutoGrab = false
         CombatState.AutoKill = false
         StopAimAssist()
+
+        if KillAuraTask then pcall(function() task.cancel(KillAuraTask) end) end
+        if AutoShotTask then pcall(function() task.cancel(AutoShotTask) end) end
+        if AutoGrabTask then pcall(function() task.cancel(AutoGrabTask) end) end
+        if AutoKillTask then pcall(function() task.cancel(AutoKillTask) end) end
+
         for _, conn in ipairs(CombatConnections) do
             pcall(function() conn:Disconnect() end)
         end
@@ -993,8 +1237,12 @@ ScreenGui.AncestryChanged:Connect(function()
         if FloatingBtnShot then FloatingBtnShot:Destroy() end
         if FloatingBtnGrab then FloatingBtnGrab:Destroy() end
         if FloatingBtnKill then FloatingBtnKill:Destroy() end
+
+        -- Remove a injeção no ABOUT
+        pcall(RemoveAboutInjection)
     end
 end)
 
 print("[" .. HUB_NAME .. "] Extensão COMBATE v" .. EXT_VERSION .. " | Tema: " .. CurrentThemeName)
-print("[KillAura] Range padrão: 10 studs | Só ativa com faca equipada/backpack")
+print("[About] Versão da extensão injetada no Indicador 2")
+print("[KillAura] Modo NoTP ativo — não teleporta | Range padrão: 10 studs | Só ativa com faca")
