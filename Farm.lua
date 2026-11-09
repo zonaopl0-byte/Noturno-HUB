@@ -1,24 +1,16 @@
 --[[
     NOTURNO HUB - EXTENSÃO: ABA FARM
-     Versão: 1.0.9
-     Base: 1.0.8
+     Versão: 1.0.8.1
+     Base: 1.0.8 (original)
 
-     Novidades 1.0.9:
+     Única mudança nesta versão:
        ✅ Injeta versão no ABOUT automaticamente (Indicador 4)
-       ✅ Previne duplicação ao recarregar (FarmActive attribute)
-       ✅ SignalConns órfãs limpas antes de reiniciar
-       ✅ CharacterAdded com task.delay (não trava evento)
-       ✅ PickFarmTarget com early-exit (< 5 studs)
-       ✅ CoinCollected verifica se é do LocalPlayer
 
-     Herdado de 1.0.8:
-       - Noclip só ativo durante movimento real do farm
-     Herdado de 1.0.7:
-       - Fallback conservador de detecção de round
+     Tudo o resto é IGUAL à v1.0.8 original.
 ]]
 
 local HUB_NAME = "NOTURNO HUB"
-local EXT_VERSION = "1.0.9"
+local EXT_VERSION = "1.0.8.1"
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -71,20 +63,10 @@ local Main = ScreenGui:FindFirstChild("Main")
 local PagesContainer = Main and Main:FindFirstChild("PagesContainer")
 local FarmPage = PagesContainer and PagesContainer:FindFirstChild("FARM")
 local AboutPage = PagesContainer and PagesContainer:FindFirstChild("ABOUT")
-
 if not FarmPage then
     warn("[" .. HUB_NAME .. "] Aba FARM não encontrada.")
     return
 end
-
--- ✅ FIX: se já estava ativo, limpa primeiro
-if ScreenGui:GetAttribute("FarmActive") == true then
-    local oldCleanup = ScreenGui:GetAttribute("FarmCleanup")
-    if type(oldCleanup) == "function" then
-        pcall(oldCleanup)
-    end
-end
-ScreenGui:SetAttribute("FarmActive", true)
 
 for _, child in ipairs(FarmPage:GetChildren()) do
     if child.Name == "FarmExtensionMarker" or child.Name == "FarmDLC_Layout" then
@@ -123,7 +105,7 @@ local Theme = Themes[CurrentThemeName] or Themes.Noturno
 local AllUIElements = {}
 local function Register(entry) table.insert(AllUIElements, entry) end
 
--- ABOUT
+-- ✅ ABOUT state (adicionado)
 local AboutCard = nil
 local AboutCardStroke = nil
 local AboutTitle = nil
@@ -172,7 +154,7 @@ local function ReapplyTheme()
 end
 
 -- ============================================================
--- INJEÇÃO NO ABOUT (Indicador 4)
+-- ✅ INJEÇÃO NO ABOUT (Indicador 4)
 -- ============================================================
 local function FindAboutRows()
     if not AboutPage then
@@ -300,7 +282,7 @@ local function RemoveAboutInjection()
 end
 
 -- ============================================================
--- HELPERS
+-- HELPERS (iguais à v1.0.8)
 -- ============================================================
 local function GetRoot(player)
     local p = player or LocalPlayer
@@ -361,20 +343,37 @@ local RoundActive = nil
 
 local function IsInActiveRound()
     local hum = GetHumanoid()
-    if not hum or hum.Health <= 0 then return false, "morto" end
+    if not hum or hum.Health <= 0 then
+        return false, "morto"
+    end
     local root = GetRoot()
-    if not root then return false, "sem personagem" end
+    if not root then
+        return false, "sem personagem"
+    end
     local container = GetCoinContainer()
-    if not container then return false, "fora de partida" end
-    if RoundActive == false then return false, "round encerrado" end
-    if RoundActive == true then return true, "em partida" end
-    if HasRoundTool() then return true, "em partida (tem ferramenta)" end
-    if IsNearMap(root) then return true, "em partida (perto do mapa)" end
+    if not container then
+        return false, "fora de partida"
+    end
+
+    if RoundActive == false then
+        return false, "round encerrado"
+    end
+    if RoundActive == true then
+        return true, "em partida"
+    end
+
+    if HasRoundTool() then
+        return true, "em partida (tem ferramenta)"
+    end
+    if IsNearMap(root) then
+        return true, "em partida (perto do mapa)"
+    end
+
     return false, "aguardando início da rodada"
 end
 
 -- ============================================================
--- NOCLIP FARM
+-- NOCLIP FARM (iguais à v1.0.8)
 -- ============================================================
 local FarmNoclipActive = false
 local FarmNoclipSaved = {}
@@ -395,7 +394,9 @@ end
 
 local function RestoreFarmNoclip()
     for part, original in pairs(FarmNoclipSaved) do
-        if part and part.Parent then part.CanCollide = original end
+        if part and part.Parent then
+            part.CanCollide = original
+        end
     end
     table.clear(FarmNoclipSaved)
 end
@@ -403,7 +404,9 @@ end
 local function StartFarmNoclip()
     if FarmNoclipActive then return end
     FarmNoclipActive = true
-    if FarmNoclipConn then pcall(function() FarmNoclipConn:Disconnect() end) end
+    if FarmNoclipConn then
+        pcall(function() FarmNoclipConn:Disconnect() end)
+    end
     FarmNoclipConn = RunService.Stepped:Connect(function()
         if not FarmNoclipActive then return end
         ApplyFarmNoclip()
@@ -430,20 +433,34 @@ local function SyncFarmNoclip(shouldBeOn)
 end
 
 -- ============================================================
--- ESTADO
+-- ESTADO (iguais à v1.0.8)
 -- ============================================================
 local FarmState = {
-    Conn = nil, Velocity = nil, Attachment = nil, Target = nil,
-    Waiting = false, BagCurrent = 0, BagMaximum = 0,
-    ResetUsedThisRound = false, LastStatus = "", StealCount = 0,
+    Conn = nil,
+    Velocity = nil,
+    Attachment = nil,
+    Target = nil,
+    Waiting = false,
+    BagCurrent = 0,
+    BagMaximum = 0,
+    ResetUsedThisRound = false,
+    LastStatus = "",
+    StealCount = 0,
 }
 
 local FarmSettings = {
-    AutoFarm = false, FarmSpeed = 22, AvoidMurderer = true,
-    MurdererRadius = 30, ResetWhenFull = false,
+    AutoFarm = false,
+    FarmSpeed = 22,
+    AvoidMurderer = true,
+    MurdererRadius = 30,
+    ResetWhenFull = false,
 }
 
-local FarmUI = { StatusLabel = nil, BagTitle = nil, BagFill = nil }
+local FarmUI = {
+    StatusLabel = nil,
+    BagTitle = nil,
+    BagFill = nil,
+}
 
 -- ============================================================
 -- SINAIS
@@ -456,7 +473,7 @@ local RoundStart = Gameplay and Gameplay:FindFirstChild("RoundStart")
 local RoundEnd = Gameplay and Gameplay:FindFirstChild("RoundEnd")
 
 -- ============================================================
--- LÓGICA
+-- LÓGICA (iguais à v1.0.8)
 -- ============================================================
 local function SetFarmStatus(text)
     if FarmState.LastStatus == text then return end
@@ -512,7 +529,6 @@ local function GetMurdererRoot()
     return nil
 end
 
--- ✅ FIX: early-exit se achar moeda < 5 studs
 local function PickFarmTarget()
     local root = GetRoot()
     if not root then return nil end
@@ -524,10 +540,6 @@ local function PickFarmTarget()
     for _, coin in ipairs(container:GetDescendants()) do
         if IsCoinPart(coin) then
             local dMe = (coin.Position - root.Position).Magnitude
-            -- ✅ early-exit: já achou uma muito perto
-            if dMe < 5 and (not murdererRoot or (coin.Position - murdererRoot.Position).Magnitude > FarmSettings.MurdererRadius) then
-                return coin
-            end
             if murdererRoot then
                 local dMur = (coin.Position - murdererRoot.Position).Magnitude
                 if dMur > safestDist then safest, safestDist = coin, dMur end
@@ -620,7 +632,8 @@ local function StartFarm()
             if FarmState.Velocity.Enabled then FarmState.Velocity.Enabled = false end
             SyncFarmNoclip(false)
             SetFarmStatus("mochila cheia! (você pode andar)")
-            if FarmSettings.ResetWhenFull and not FarmState.ResetUsedThisRound then
+            if FarmSettings.ResetWhenFull
+               and not FarmState.ResetUsedThisRound then
                 FarmState.ResetUsedThisRound = true
                 StopFarm()
                 task.wait(0.5)
@@ -684,7 +697,7 @@ local function StartFarm()
 end
 
 -- ============================================================
--- UI HELPERS
+-- UI HELPERS (iguais à v1.0.8)
 -- ============================================================
 local function AddHeader(parent, text, order)
     local lbl = Create("TextLabel", {
@@ -882,7 +895,7 @@ Create("UIListLayout", {
 }, Col)
 
 -- ============================================================
--- INJEÇÃO
+-- INJEÇÃO (igual v1.0.8)
 -- ============================================================
 AddHeader(Col, "💰 AUTO FARM", 1)
 
@@ -937,7 +950,7 @@ FarmUI.StatusLabel = Create("TextLabel", {
 Register({ Type = "Status", Obj = FarmUI.StatusLabel })
 
 -- ============================================================
--- SINAIS (com limpeza)
+-- SINAIS (igual v1.0.8)
 -- ============================================================
 local SignalConns = {}
 local function TrackConn(conn)
@@ -946,9 +959,7 @@ local function TrackConn(conn)
 end
 
 if CoinCollected and CoinCollected:IsA("RemoteEvent") then
-    TrackConn(CoinCollected.OnClientEvent:Connect(function(player, cur, max)
-        -- ✅ FIX: ignora eventos de outros players
-        if player and player ~= LocalPlayer then return end
+    TrackConn(CoinCollected.OnClientEvent:Connect(function(_, cur, max)
         cur = tonumber(cur); max = tonumber(max)
         if cur and max and max > 0 then
             FarmState.BagCurrent = cur
@@ -996,7 +1007,6 @@ if RoundEnd and RoundEnd:IsA("RemoteEvent") then
     end))
 end
 
--- ✅ FIX: task.delay em vez de task.wait
 TrackConn(LocalPlayer.CharacterAdded:Connect(function()
     StopFarmNoclip()
     FarmState.BagCurrent = 0
@@ -1006,14 +1016,13 @@ TrackConn(LocalPlayer.CharacterAdded:Connect(function()
     FarmState.Waiting = false
     UpdateBagDisplay()
     StopFarm()
-    task.delay(1, function()
-        if FarmSettings.AutoFarm then
-            local hum = GetHumanoid()
-            if hum and hum.Health > 0 then
-                StartFarm()
-            end
+    task.wait(1)
+    if FarmSettings.AutoFarm then
+        local hum = GetHumanoid()
+        if hum and hum.Health > 0 then
+            StartFarm()
         end
-    end)
+    end
 end))
 
 -- ============================================================
@@ -1033,14 +1042,13 @@ task.spawn(function()
 end)
 
 -- ============================================================
--- ✅ INJETA NO ABOUT
+-- ✅ INJETA NO ABOUT (única novidade)
 -- ============================================================
 task.spawn(function()
-    task.wait(0.9)
+    task.wait(0.8)
     pcall(InjectAboutVersion)
 end)
 
--- Manutenção do ABOUT
 task.spawn(function()
     while ScreenGui.Parent do
         pcall(function()
@@ -1057,7 +1065,7 @@ task.spawn(function()
 end)
 
 -- ============================================================
--- TEMA
+-- TEMA (igual v1.0.8)
 -- ============================================================
 task.spawn(function()
     local lastTheme = CurrentThemeName
@@ -1074,27 +1082,19 @@ task.spawn(function()
 end)
 
 -- ============================================================
--- CLEANUP
+-- CLEANUP (igual v1.0.8 + remoção do ABOUT)
 -- ============================================================
-local function FullCleanup()
-    StopFarm()
-    StopFarmNoclip()
-    for _, conn in ipairs(SignalConns) do
-        pcall(function() conn:Disconnect() end)
-    end
-    table.clear(SignalConns)
-    pcall(RemoveAboutInjection)
-end
-
--- Registra cleanup pro guard de reload
-ScreenGui:SetAttribute("FarmCleanup", FullCleanup)
-
 ScreenGui.AncestryChanged:Connect(function()
     if not ScreenGui.Parent then
-        ScreenGui:SetAttribute("FarmActive", false)
-        FullCleanup()
+        StopFarm()
+        StopFarmNoclip()
+        for _, conn in ipairs(SignalConns) do
+            pcall(function() conn:Disconnect() end)
+        end
+        table.clear(SignalConns)
+        pcall(RemoveAboutInjection)
     end
 end)
 
 print("[" .. HUB_NAME .. "] Extensão FARM v" .. EXT_VERSION .. " | Tema: " .. CurrentThemeName)
-print("[About] Versão do Farm injetada automaticamente no Indicador 4")
+print("[About] Versão do Farm injetada no Indicador 4")
