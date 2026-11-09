@@ -1,28 +1,23 @@
---[[ NOTURNO HUB - EXTENSÃO: ABA TROLL
-     Versão: 2.6.1
-     Base: v2.6
+--[[
+    NOTURNO HUB - EXTENSÃO: ABA TROLL
+     Versão: 2.6.2
+     Base: v2.6.1
 
-     Mudanças desta versão:
-       - Name Spoof text: "🌙 NOTURNO 🌙" → "Noturno HUB"
-       - Adicionado SendChatFallback (opcional, comentado) — manda
-         "Noturno HUB" no chat via TextChatService, que APARECE
-         pra todos os jogadores (diferente do BillboardGui)
-       - AVISO: BillboardGui criado por LocalScript NÃO replica.
-         Só VOCÊ vê o spoof acima da cabeça. Para aparecer a todos
-         de verdade, precisaria de um RemoteEvent server-side do
-         jogo, que não temos aqui.
-
-     Herdado da v2.6 (NuclearLaunch server-friendly, stick grace, etc.)
+     Novidades v2.6.2:
+       ✅ Injeta versão no ABOUT automaticamente (Indicador 3)
+       ✅ NuclearLaunch verifica alvo antes de restaurar
+       ✅ FlingBusy resetado no unload
+       ✅ glueConn cancelado no unload
+       ✅ StopStick(syncToggle) sincroniza UI
+       ✅ SetFlingNoclip ignora partes de Tool
+       ✅ ApplySpectateCamera com task.wait(0.1)
+       ✅ DestroySpectateOverlay limpa AllUIElements
 ]]
 
 local HUB_NAME = "NOTURNO HUB"
-local EXT_VERSION = "2.6.1"
+local EXT_VERSION = "2.6.2"
 
--- Texto que aparece no spoof
 local SPOOF_TEXT = "Noturno HUB"
-
--- Se true, também manda a mensagem no chat (aparece pra todos)
--- ATENÇÃO: pode dar mute em jogos com anti-spam. Rate-limited.
 local CHAT_FALLBACK_ENABLED = false
 
 local Players = game:GetService("Players")
@@ -74,6 +69,8 @@ end
 local Main = ScreenGui:FindFirstChild("Main")
 local PagesContainer = Main and Main:FindFirstChild("PagesContainer")
 local TrollPage = PagesContainer and PagesContainer:FindFirstChild("TROLL")
+local AboutPage = PagesContainer and PagesContainer:FindFirstChild("ABOUT")
+
 if not TrollPage then
     warn("[" .. HUB_NAME .. "] Aba TROLL não encontrada.")
     return
@@ -134,6 +131,12 @@ local SpectateState = {
 
 local SpectateOverlay = {}
 
+-- ABOUT
+local AboutCard = nil
+local AboutCardStroke = nil
+local AboutTitle = nil
+local AboutVersion = nil
+
 local AllUIElements = {}
 local function Register(entry) table.insert(AllUIElements, entry) end
 
@@ -177,6 +180,150 @@ local function ReapplyTheme()
     for _, entry in ipairs(AllUIElements) do
         pcall(ApplyThemeToEntry, entry)
     end
+    -- ABOUT
+    if AboutCard and AboutCard.Parent then AboutCard.BackgroundColor3 = Theme.Button end
+    if AboutCardStroke and AboutCardStroke.Parent then AboutCardStroke.Color = Theme.Accent end
+    if AboutTitle and AboutTitle.Parent then AboutTitle.TextColor3 = Theme.Text end
+    if AboutVersion and AboutVersion.Parent then AboutVersion.TextColor3 = Theme.Accent end
+end
+
+-- ============================================================
+-- ✅ INJEÇÃO NO ABOUT (Indicador 3)
+-- ============================================================
+local function FindAboutRows()
+    if not AboutPage then
+        AboutPage = PagesContainer and PagesContainer:FindFirstChild("ABOUT")
+    end
+    if not AboutPage then return nil end
+    return AboutPage:FindFirstChild("Rows")
+end
+
+local function FindEmptySlotInRows(rows)
+    if not rows then return nil end
+    local lines = {}
+    for _, child in ipairs(rows:GetChildren()) do
+        if child:IsA("Frame") then
+            local layout = child:FindFirstChildOfClass("UIListLayout")
+            if layout and layout.FillDirection == Enum.FillDirection.Horizontal then
+                table.insert(lines, child)
+            end
+        end
+    end
+    table.sort(lines, function(a,b) return a.LayoutOrder < b.LayoutOrder end)
+
+    for _, line in ipairs(lines) do
+        for _, card in ipairs(line:GetChildren()) do
+            if card:IsA("Frame") then
+                -- ✅ Pula cards já injetados por outras extensões
+                local injectedBy = card:GetAttribute("InjectedBy")
+                if injectedBy and injectedBy ~= "Troll" then
+                    -- não é nosso, pula
+                else
+                    local hasText = false
+                    for _, desc in ipairs(card:GetDescendants()) do
+                        if desc:IsA("TextLabel") and desc.Text and desc.Text ~= "" then
+                            hasText = true
+                            break
+                        end
+                    end
+                    if not hasText then
+                        return card
+                    end
+                end
+            end
+        end
+    end
+    return nil
+end
+
+local function CreateAboutCard(rows)
+    if not rows then return nil end
+    local card = Create("Frame", {
+        Size = UDim2.new(0.47,0,0,70),
+        BackgroundColor3 = Theme.Button,
+        BorderSizePixel = 0,
+        LayoutOrder = 960,
+    }, rows)
+    Create("UICorner", { CornerRadius = UDim.new(0,8) }, card)
+    local stroke = Create("UIStroke", { Color = Theme.Accent, Thickness = 1.2, Transparency = 0.5 }, card)
+    return card, stroke
+end
+
+local function FillAboutCard(card, stroke)
+    if not card or not card.Parent then return end
+    for _, child in ipairs(card:GetChildren()) do
+        if child:IsA("TextLabel") then child:Destroy() end
+    end
+    card:SetAttribute("InjectedBy", "Troll")
+
+    AboutTitle = Create("TextLabel", {
+        Size = UDim2.new(1,0,0,26),
+        Position = UDim2.fromOffset(0,12),
+        BackgroundTransparency = 1,
+        Text = "😈 Troll",
+        TextColor3 = Theme.Text,
+        TextSize = 14,
+        Font = Enum.Font.GothamBold,
+        TextXAlignment = Enum.TextXAlignment.Center
+    }, card)
+
+    AboutVersion = Create("TextLabel", {
+        Size = UDim2.new(1,0,0,20),
+        Position = UDim2.fromOffset(0,38),
+        BackgroundTransparency = 1,
+        Text = "Versão: " .. EXT_VERSION,
+        TextColor3 = Theme.Accent,
+        TextSize = 12,
+        Font = Enum.Font.GothamBold,
+        TextXAlignment = Enum.TextXAlignment.Center
+    }, card)
+
+    AboutCard = card
+    AboutCardStroke = stroke
+end
+
+local function InjectAboutVersion()
+    local rows = FindAboutRows()
+    if not rows then return end
+
+    if AboutCard and AboutCard.Parent then
+        if AboutVersion and AboutVersion.Parent then
+            AboutVersion.Text = "Versão: " .. EXT_VERSION
+            AboutVersion.TextColor3 = Theme.Accent
+        end
+        if AboutTitle and AboutTitle.Parent then
+            AboutTitle.TextColor3 = Theme.Text
+        end
+        if AboutCardStroke and AboutCardStroke.Parent then
+            AboutCardStroke.Color = Theme.Accent
+        end
+        if AboutCard then AboutCard.BackgroundColor3 = Theme.Button end
+        return
+    end
+
+    local slot = FindEmptySlotInRows(rows)
+    local stroke
+    if slot then
+        stroke = slot:FindFirstChildOfClass("UIStroke")
+        FillAboutCard(slot, stroke)
+        print("[" .. HUB_NAME .. "] Indicador Troll injetado em slot existente.")
+    else
+        local newCard, newStroke = CreateAboutCard(rows)
+        if newCard then
+            FillAboutCard(newCard, newStroke)
+            print("[" .. HUB_NAME .. "] Indicador Troll criado em novo card.")
+        end
+    end
+end
+
+local function RemoveAboutInjection()
+    if AboutCard and AboutCard.Parent then
+        AboutCard:Destroy()
+    end
+    AboutCard = nil
+    AboutCardStroke = nil
+    AboutTitle = nil
+    AboutVersion = nil
 end
 
 -- ============================================================
@@ -188,8 +335,17 @@ local function GetRoot(player)
     return char and char:FindFirstChild("HumanoidRootPart")
 end
 
+local function IsToolPart(part)
+    local p = part
+    while p and p ~= LocalPlayer.Character do
+        if p:IsA("Tool") then return true end
+        p = p.Parent
+    end
+    return false
+end
+
 -- ============================================================
--- CHAT FALLBACK (opcional — aparece pra todos no chat)
+-- CHAT FALLBACK
 -- ============================================================
 local function SendChatFallback()
     if not CHAT_FALLBACK_ENABLED then return end
@@ -239,11 +395,11 @@ local function ApplyNameSpoof(on)
 end
 
 -- ============================================================
--- STICK TO PLAYER (com grace period)
+-- STICK TO PLAYER (com syncToggle)
 -- ============================================================
 local STICK_GRACE_FRAMES = 30
 
-local function StopStick()
+local function StopStick(syncToggle)
     TrollState.Stick = false
     TrollState.StickTarget = nil
     TrollState.StickMissFrames = 0
@@ -251,10 +407,13 @@ local function StopStick()
         pcall(function() TrollState.StickConn:Disconnect() end)
         TrollState.StickConn = nil
     end
+    if syncToggle and TrollState.StickToggle then
+        TrollState.StickToggle.SetState(false)
+    end
 end
 
 local function StartStick(target)
-    StopStick()
+    StopStick(false)
     if not target then return end
     TrollState.Stick = true
     TrollState.StickTarget = target
@@ -262,32 +421,21 @@ local function StartStick(target)
 
     TrollState.StickConn = RunService.Heartbeat:Connect(function()
         if not TrollState.Stick then return end
-
         if not target or not target.Parent then
-            StopStick()
-            if TrollState.StickToggle then
-                TrollState.StickToggle.SetState(false)
-            end
+            StopStick(true)
             return
         end
-
         local myRoot = GetRoot()
         if not myRoot then return end
-
         local tRoot = GetRoot(target)
         if not tRoot then
             TrollState.StickMissFrames = TrollState.StickMissFrames + 1
             if TrollState.StickMissFrames >= STICK_GRACE_FRAMES then
-                StopStick()
-                if TrollState.StickToggle then
-                    TrollState.StickToggle.SetState(false)
-                end
+                StopStick(true)
             end
             return
         end
-
         TrollState.StickMissFrames = 0
-
         myRoot.CFrame = tRoot.CFrame * CFrame.new(0, 0, 2)
         myRoot.AssemblyLinearVelocity = Vector3.zero
     end)
@@ -334,7 +482,10 @@ local function ApplySpectateCamera()
     if not SpectateState.Enabled then return end
     local t = SpectateState.Target
     if not t or not t.Parent then
-        if AdvanceSpectate then AdvanceSpectate(1) end
+        if AdvanceSpectate then
+            AdvanceSpectate(1)
+            task.wait(0.1)  -- ✅ evita loop apertado
+        end
         return
     end
     local tHum = t.Character and t.Character:FindFirstChildOfClass("Humanoid")
@@ -393,7 +544,7 @@ AdvanceSpectate = function(direction)
 end
 
 -- ============================================================
--- SPECTATE FLOATING OVERLAY (base inferior)
+-- SPECTATE OVERLAY
 -- ============================================================
 local function IsPointOverButton(frame, point)
     for _, child in ipairs(frame:GetChildren()) do
@@ -508,16 +659,8 @@ local function CreateSpectateOverlay()
            and input.UserInputType ~= Enum.UserInputType.Touch then return end
         local delta = input.Position - dragStart
         local vp = workspace.CurrentCamera.ViewportSize
-        local newX = math.clamp(
-            startPos.X.Offset + delta.X,
-            -frame.AbsoluteSize.X + 40,
-            vp.X - 40
-        )
-        local newY = math.clamp(
-            startPos.Y.Offset + delta.Y,
-            0,
-            vp.Y - 40
-        )
+        local newX = math.clamp(startPos.X.Offset + delta.X, -frame.AbsoluteSize.X + 40, vp.X - 40)
+        local newY = math.clamp(startPos.Y.Offset + delta.Y, 0, vp.Y - 40)
         frame.Position = UDim2.fromOffset(newX, newY)
     end)
     local dragEndConn = UserInputService.InputEnded:Connect(function(input)
@@ -550,7 +693,7 @@ local function CreateSpectateOverlay()
 end
 
 -- ============================================================
--- FLING v2.2 — MODO NUCLEAR ☢️ (server-friendly)
+-- FLING v2.2 (modo nuclear)
 -- ============================================================
 local FLING_FORCE        = 450000
 local FLING_TIME         = 5.0
@@ -566,6 +709,9 @@ local FLING_NUKE_HOLD    = 5.0
 local FlingBusy = false
 local FlingSavedCollide = {}
 local FlingNoclipConn = nil
+local ActiveGlueConn = nil
+local ActiveSpin = nil
+local ActiveTargetSpin = nil
 
 local function SetFlingNoclip(enabled)
     if FlingNoclipConn then
@@ -582,8 +728,8 @@ local function SetFlingNoclip(enabled)
     FlingNoclipConn = RunService.Stepped:Connect(function()
         local char = LocalPlayer.Character
         if not char then return end
-        for _, part in ipairs(char:GetChildren()) do
-            if part:IsA("BasePart") then
+        for _, part in ipairs(char:GetDescendants()) do
+            if part:IsA("BasePart") and not IsToolPart(part) then
                 if FlingSavedCollide[part] == nil then
                     FlingSavedCollide[part] = part.CanCollide
                 end
@@ -633,24 +779,18 @@ local function NuclearLaunch(target)
             if conn then conn:Disconnect() end
             return
         end
-
         local currentRoot = GetRoot(target)
         local currentHum = target.Character and target.Character:FindFirstChildOfClass("Humanoid")
         if not currentRoot or not currentHum then return end
-
         pcall(function()
             currentRoot.AssemblyLinearVelocity = Vector3.new(0, FLING_NUKE_VEL, 0)
-            currentRoot.AssemblyAngularVelocity = Vector3.new(
-                FLING_NUKE_SPIN, FLING_NUKE_SPIN, FLING_NUKE_SPIN
-            )
-
+            currentRoot.AssemblyAngularVelocity = Vector3.new(FLING_NUKE_SPIN, FLING_NUKE_SPIN, FLING_NUKE_SPIN)
             if currentHum:GetState() ~= Enum.HumanoidStateType.Physics then
                 currentHum:ChangeState(Enum.HumanoidStateType.Physics)
             end
             if not currentHum.PlatformStand then
                 currentHum.PlatformStand = true
             end
-
             if bv.Parent ~= currentRoot then bv.Parent = currentRoot end
             if bav.Parent ~= currentRoot then bav.Parent = currentRoot end
         end)
@@ -659,8 +799,12 @@ local function NuclearLaunch(target)
     task.delay(FLING_NUKE_HOLD, function()
         if bv and bv.Parent then bv:Destroy() end
         if bav and bav.Parent then bav:Destroy() end
-
-        local currentHum = target.Character and target.Character:FindFirstChildOfClass("Humanoid")
+        -- ✅ verifica se o alvo ainda existe antes de restaurar
+        local t = target
+        if not t or not t.Parent then return end
+        local currentChar = t.Character
+        if not currentChar then return end
+        local currentHum = currentChar:FindFirstChildOfClass("Humanoid")
         if currentHum and currentHum.Parent then
             pcall(function()
                 currentHum.PlatformStand = savedPlatformStand
@@ -681,33 +825,31 @@ local function FlingPlayer(target, duration)
     duration = duration or FLING_TIME
     local home = root.CFrame
 
-    local spin = Instance.new("BodyAngularVelocity")
-    spin.MaxTorque = Vector3.new(1e9, 1e9, 1e9)
-    spin.AngularVelocity = Vector3.new(FLING_FORCE * 0.3, FLING_FORCE, FLING_FORCE * 0.3)
-    spin.Parent = root
+    ActiveSpin = Instance.new("BodyAngularVelocity")
+    ActiveSpin.MaxTorque = Vector3.new(1e9, 1e9, 1e9)
+    ActiveSpin.AngularVelocity = Vector3.new(FLING_FORCE * 0.3, FLING_FORCE, FLING_FORCE * 0.3)
+    ActiveSpin.Parent = root
 
-    local targetSpin = Instance.new("BodyAngularVelocity")
-    targetSpin.MaxTorque = Vector3.new(1e9, 1e9, 1e9)
-    targetSpin.AngularVelocity = Vector3.zero
+    ActiveTargetSpin = Instance.new("BodyAngularVelocity")
+    ActiveTargetSpin.MaxTorque = Vector3.new(1e9, 1e9, 1e9)
+    ActiveTargetSpin.AngularVelocity = Vector3.zero
 
     SetFlingNoclip(true)
 
     local started = os.clock()
     local frameCount = 0
 
-    local glueConn = RunService.Stepped:Connect(function()
+    ActiveGlueConn = RunService.Stepped:Connect(function()
         if not root.Parent then return end
         if os.clock() - started >= duration then return end
-
         local currentTarget = GetRoot(target)
         if not currentTarget then return end
-
         root.CFrame = currentTarget.CFrame
         root.AssemblyLinearVelocity = Vector3.zero
-        root.AssemblyAngularVelocity = spin.AngularVelocity
+        root.AssemblyAngularVelocity = ActiveSpin.AngularVelocity
 
-        if targetSpin.Parent ~= currentTarget then
-            targetSpin.Parent = currentTarget
+        if ActiveTargetSpin.Parent ~= currentTarget then
+            ActiveTargetSpin.Parent = currentTarget
         end
 
         frameCount = frameCount + 1
@@ -724,8 +866,8 @@ local function FlingPlayer(target, duration)
                     math.random(-FLING_TARGET_SPIN, FLING_TARGET_SPIN)
                 )
             end)
-            if targetSpin.Parent then
-                targetSpin.AngularVelocity = Vector3.new(
+            if ActiveTargetSpin.Parent then
+                ActiveTargetSpin.AngularVelocity = Vector3.new(
                     FLING_TARGET_SPIN, FLING_TARGET_SPIN, FLING_TARGET_SPIN
                 )
             end
@@ -734,10 +876,10 @@ local function FlingPlayer(target, duration)
 
     task.wait(duration)
 
-    if glueConn then glueConn:Disconnect() end
-
-    spin:Destroy()
-    if targetSpin.Parent then targetSpin:Destroy() end
+    if ActiveGlueConn then ActiveGlueConn:Disconnect(); ActiveGlueConn = nil end
+    if ActiveSpin then ActiveSpin:Destroy(); ActiveSpin = nil end
+    if ActiveTargetSpin and ActiveTargetSpin.Parent then ActiveTargetSpin:Destroy() end
+    ActiveTargetSpin = nil
 
     if FLING_NUKE_ENABLED then
         NuclearLaunch(target)
@@ -885,11 +1027,9 @@ local PlayerListBtn, PlayerList, RefreshList
 local function SelectTarget(p)
     SelectedPlayer = p
     TrollState.StickTarget = p
-
     if TrollState.Stick and p then
         StartStick(p)
     end
-
     if PlayerListBtn and PlayerListBtn.Parent then
         PlayerListBtn.Text = p and ("🎯 Alvo: " .. p.Name .. "  ▼") or "🎯 Selecione um jogador  ▼"
     end
@@ -981,7 +1121,7 @@ TrollState.StickToggle = AddToggle(Col, "🧲 Stick to Player (grudar ATRÁS)", 
         end
         StartStick(SelectedPlayer)
     else
-        StopStick()
+        StopStick(false)
     end
 end, 8)
 
@@ -1018,15 +1158,11 @@ AddButtonRow(Col, {
     { Text = "☢️ Nuke TODOS", Callback = function(btn)
         if NukeTodosArmed then
             NukeTodosArmed = false
-            if NukeTodosTimer then
-                pcall(task.cancel, NukeTodosTimer)
-                NukeTodosTimer = nil
-            end
+            if NukeTodosTimer then pcall(task.cancel, NukeTodosTimer); NukeTodosTimer = nil end
             if btn and btn.Parent then
                 btn.Text = "☢️ Nuke TODOS"
                 pcall(function() btn.BackgroundColor3 = Theme.Button end)
             end
-
             task.spawn(function()
                 for _, p in ipairs(Players:GetPlayers()) do
                     if p ~= LocalPlayer then
@@ -1037,16 +1173,12 @@ AddButtonRow(Col, {
             end)
             return
         end
-
         NukeTodosArmed = true
         if btn and btn.Parent then
             btn.Text = "⚠️ CONFIRMAR? (" .. NUKE_TODOS_CONFIRM_TIME .. "s)"
             pcall(function() btn.BackgroundColor3 = Color3.fromRGB(200, 40, 40) end)
         end
-
-        if NukeTodosTimer then
-            pcall(task.cancel, NukeTodosTimer)
-        end
+        if NukeTodosTimer then pcall(task.cancel, NukeTodosTimer) end
         NukeTodosTimer = task.delay(NUKE_TODOS_CONFIRM_TIME, function()
             NukeTodosArmed = false
             NukeTodosTimer = nil
@@ -1057,6 +1189,14 @@ AddButtonRow(Col, {
         end)
     end },
 }, 10)
+
+-- ============================================================
+-- ✅ INJETA A VERSÃO NO ABOUT
+-- ============================================================
+task.spawn(function()
+    task.wait(0.7)
+    pcall(InjectAboutVersion)
+end)
 
 -- ============================================================
 -- LOOP DE TEMA
@@ -1076,6 +1216,22 @@ task.spawn(function()
     end
 end)
 
+-- Loop de manutenção do ABOUT
+task.spawn(function()
+    while ScreenGui.Parent do
+        pcall(function()
+            if not AboutCard or not AboutCard.Parent then
+                InjectAboutVersion()
+            elseif AboutVersion and AboutVersion.Parent then
+                if AboutVersion.Text ~= "Versão: " .. EXT_VERSION then
+                    AboutVersion.Text = "Versão: " .. EXT_VERSION
+                end
+            end
+        end)
+        task.wait(3)
+    end
+end)
+
 -- ============================================================
 -- ROUNDSTART
 -- ============================================================
@@ -1084,14 +1240,12 @@ local Gameplay = Remotes and Remotes:FindFirstChild("Gameplay")
 local RoundStart = Gameplay and Gameplay:FindFirstChild("RoundStart")
 if RoundStart and RoundStart:IsA("RemoteEvent") then
     RoundStart.OnClientEvent:Connect(function()
-        StopStick()
-        if TrollState.StickToggle then TrollState.StickToggle.SetState(false) end
+        StopStick(true)
         StopSpectate(true)
         if TrollState.NameSpoof then
-            task.delay(0.5, function()
-                ApplyNameSpoof(true)
-            end)
+            task.delay(0.5, function() ApplyNameSpoof(true) end)
         end
+        pcall(InjectAboutVersion)
     end)
 end
 
@@ -1113,26 +1267,44 @@ local function DestroySpectateOverlay()
         SpectateOverlay.Frame = nil
         SpectateOverlay.Label = nil
     end
+    -- ✅ limpa registros da UI destruída
+    for i = #AllUIElements, 1, -1 do
+        local e = AllUIElements[i]
+        if e.Type == "FloatingOverlay" or e.Type == "FloatingButton" or e.Type == "FloatingLabel" then
+            if not e.Obj or not e.Obj.Parent then
+                table.remove(AllUIElements, i)
+            end
+        end
+    end
 end
 
 ScreenGui.AncestryChanged:Connect(function()
     if not ScreenGui.Parent then
-        StopStick()
+        StopStick(false)
         StopSpectate(false)
         SetFlingNoclip(false)
+
+        -- ✅ reseta flag de fling e cancela conexões pendentes
+        FlingBusy = false
+        if ActiveGlueConn then pcall(function() ActiveGlueConn:Disconnect() end); ActiveGlueConn = nil end
+        if ActiveSpin then pcall(function() ActiveSpin:Destroy() end); ActiveSpin = nil end
+        if ActiveTargetSpin then pcall(function() ActiveTargetSpin:Destroy() end); ActiveTargetSpin = nil end
+
         DestroySpectateOverlay()
-        if NukeTodosTimer then
-            pcall(task.cancel, NukeTodosTimer)
-            NukeTodosTimer = nil
-        end
+
+        if NukeTodosTimer then pcall(task.cancel, NukeTodosTimer); NukeTodosTimer = nil end
         NukeTodosArmed = false
+
         local char = LocalPlayer.Character
         if char then
             local head = char:FindFirstChild("Head")
             local spoof = head and head:FindFirstChild("__TrollNameSpoof")
             if spoof then spoof:Destroy() end
         end
+
+        pcall(RemoveAboutInjection)
     end
 end)
 
 print("[" .. HUB_NAME .. "] Extensão TROLL v" .. EXT_VERSION .. " | Tema: " .. CurrentThemeName)
+print("[About] Versão do Troll injetada automaticamente no Indicador 3")
