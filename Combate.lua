@@ -1,24 +1,24 @@
 --[[
     NOTURNO HUB - EXTENSÃO: ABA COMBATE
      Versão: 0.3.0
-     Requer: NOTURNO HUB v0.9.6+ já carregado
+     Requer: NOTURNO HUB v0.9.9+ (com registry de extensões)
 
      Novidades v0.3.0:
-       ✅ Injeta versão 0.2.9 na aba ABOUT do hub automaticamente
-       ✅ Detecta slot vazio (Indicador 2, 3 ou 4) e preenche
-       ✅ Cria card novo se não houver slot vazio
-       ✅ Remove ao desexecutar
-
-     Novidades v0.2.9 (mantidas):
+       ✅ Integração com Save System do Hub (v0.9.9+)
+       ✅ Salva/carrega: Kill Aura, Hitbox, Auto Shot, Auto Grab,
+          Auto Kill, Botões Flutuantes
        ✅ Kill Aura NoTP (não teleporta)
        ✅ IsBusy separado (Stab / Grab / Shot)
        ✅ Verificação de alvo vivo
        ✅ task.cancel nos loops
-       ✅ Kill Aura Range configurável
+
+     Herdado v0.2.9:
+       - Layout 2 colunas (Sheriff / Murderer)
+       - Botões flutuantes (Shot / Grab / Kill)
 ]]
 
 local HUB_NAME = "NOTURNO HUB"
-local EXT_VERSION = "0.2.9"
+local EXT_VERSION = "0.3.0"
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -36,7 +36,7 @@ local AIM_SMOOTH = false
 local AIM_PRIORITY = Enum.RenderPriority.Camera.Value + 1
 
 -- ============================================================
--- PALETA OFICIAL
+-- PALETA
 -- ============================================================
 local Themes = {
     Noturno = { Main = Color3.fromRGB(28,22,40), Header = Color3.fromRGB(58,38,92),
@@ -77,8 +77,6 @@ end
 local Main = ScreenGui:FindFirstChild("Main")
 local PagesContainer = Main and Main:FindFirstChild("PagesContainer")
 local CombatPage = PagesContainer and PagesContainer:FindFirstChild("COMBATE")
-local AboutPage = PagesContainer and PagesContainer:FindFirstChild("ABOUT")
-
 if not CombatPage then
     warn("[" .. HUB_NAME .. "] Aba COMBATE não encontrada.")
     return
@@ -138,165 +136,23 @@ local CombatState = {
 local CombatConnections = {}
 local AllUIElements = {}
 
+-- ✅ Refs pros toggles/sliders (necessário pro save)
+local CombatToggles = {}
+local CombatSliders = {}
+
+-- IsBusy separado
 local IsBusyStab = false
 local IsBusyGrab = false
 local IsBusyShot = false
 
+-- Handles das tasks
 local KillAuraTask = nil
 local AutoShotTask = nil
 local AutoGrabTask = nil
 local AutoKillTask = nil
 
--- ABOUT state
-local AboutCard = nil
-local AboutCardStroke = nil
-local AboutTitle = nil
-local AboutVersion = nil
-
 local function Register(entry) table.insert(AllUIElements, entry) end
 
--- ============================================================
--- ✅ INJEÇÃO NA ABA ABOUT
--- ============================================================
-local function FindAboutRows()
-    if not AboutPage then
-        AboutPage = PagesContainer and PagesContainer:FindFirstChild("ABOUT")
-    end
-    if not AboutPage then return nil end
-    return AboutPage:FindFirstChild("Rows")
-end
-
-local function FindEmptySlotInRows(rows)
-    if not rows then return nil end
-    -- Procura linhas horizontais (AboutRow1, AboutRow2)
-    local lines = {}
-    for _, child in ipairs(rows:GetChildren()) do
-        if child:IsA("Frame") then
-            local layout = child:FindFirstChildOfClass("UIListLayout")
-            if layout and layout.FillDirection == Enum.FillDirection.Horizontal then
-                table.insert(lines, child)
-            end
-        end
-    end
-    table.sort(lines, function(a,b) return a.LayoutOrder < b.LayoutOrder end)
-
-    -- Varre cada card, procura vazio (sem TextLabel com texto)
-    for _, line in ipairs(lines) do
-        for _, card in ipairs(line:GetChildren()) do
-            if card:IsA("Frame") then
-                local hasText = false
-                for _, desc in ipairs(card:GetDescendants()) do
-                    if desc:IsA("TextLabel") and desc.Text and desc.Text ~= "" then
-                        hasText = true
-                        break
-                    end
-                end
-                if not hasText then
-                    return card
-                end
-            end
-        end
-    end
-    return nil
-end
-
-local function CreateAboutCard(rows)
-    if not rows then return nil end
-    local card = Create("Frame", {
-        Size = UDim2.new(0.47,0,0,70),
-        BackgroundColor3 = Theme.Button,
-        BorderSizePixel = 0,
-        LayoutOrder = 950,
-    }, rows)
-    Create("UICorner", { CornerRadius = UDim.new(0,8) }, card)
-    local stroke = Create("UIStroke", { Color = Theme.Accent, Thickness = 1.2, Transparency = 0.5 }, card)
-    return card, stroke
-end
-
-local function FillAboutCard(card, stroke)
-    if not card or not card.Parent then return end
-    -- Limpa filhos (caso já existam placeholders)
-    for _, child in ipairs(card:GetChildren()) do
-        if child:IsA("TextLabel") then child:Destroy() end
-    end
-
-    AboutTitle = Create("TextLabel", {
-        Size = UDim2.new(1,0,0,26),
-        Position = UDim2.fromOffset(0,12),
-        BackgroundTransparency = 1,
-        Text = "🎯 Combate",
-        TextColor3 = Theme.Text,
-        TextSize = 14,
-        Font = Enum.Font.GothamBold,
-        TextXAlignment = Enum.TextXAlignment.Center
-    }, card)
-
-    AboutVersion = Create("TextLabel", {
-        Size = UDim2.new(1,0,0,20),
-        Position = UDim2.fromOffset(0,38),
-        BackgroundTransparency = 1,
-        Text = "Versão: " .. EXT_VERSION,
-        TextColor3 = Theme.Accent,
-        TextSize = 12,
-        Font = Enum.Font.GothamBold,
-        TextXAlignment = Enum.TextXAlignment.Center
-    }, card)
-
-    AboutCard = card
-    AboutCardStroke = stroke
-end
-
-local function InjectAboutVersion()
-    local rows = FindAboutRows()
-    if not rows then return end
-
-    -- Já foi injetado? Só atualiza versão
-    if AboutCard and AboutCard.Parent then
-        if AboutVersion and AboutVersion.Parent then
-            AboutVersion.Text = "Versão: " .. EXT_VERSION
-            AboutVersion.TextColor3 = Theme.Accent
-        end
-        if AboutTitle and AboutTitle.Parent then
-            AboutTitle.TextColor3 = Theme.Text
-        end
-        if AboutCardStroke and AboutCardStroke.Parent then
-            AboutCardStroke.Color = Theme.Accent
-        end
-        if AboutCard then AboutCard.BackgroundColor3 = Theme.Button end
-        return
-    end
-
-    -- Procura slot vazio
-    local slot = FindEmptySlotInRows(rows)
-    local stroke
-    if slot then
-        -- Usa o slot vazio existente (procura stroke dele)
-        stroke = slot:FindFirstChildOfClass("UIStroke")
-        FillAboutCard(slot, stroke)
-        print("[" .. HUB_NAME .. "] Indicador de Combate injetado em slot existente.")
-    else
-        -- Cria card novo
-        local newCard, newStroke = CreateAboutCard(rows)
-        if newCard then
-            FillAboutCard(newCard, newStroke)
-            print("[" .. HUB_NAME .. "] Indicador de Combate criado em novo card.")
-        end
-    end
-end
-
-local function RemoveAboutInjection()
-    if AboutCard and AboutCard.Parent then
-        AboutCard:Destroy()
-    end
-    AboutCard = nil
-    AboutCardStroke = nil
-    AboutTitle = nil
-    AboutVersion = nil
-end
-
--- ============================================================
--- APLICAÇÃO DE TEMA
--- ============================================================
 local function ApplyThemeToEntry(entry)
     local o = entry.Obj
     if not o or not o.Parent then return end
@@ -330,19 +186,6 @@ end
 local function ReapplyTheme()
     for _, entry in ipairs(AllUIElements) do
         pcall(ApplyThemeToEntry, entry)
-    end
-    -- Re-aplica no ABOUT
-    if AboutCard and AboutCard.Parent then
-        AboutCard.BackgroundColor3 = Theme.Button
-    end
-    if AboutCardStroke and AboutCardStroke.Parent then
-        AboutCardStroke.Color = Theme.Accent
-    end
-    if AboutTitle and AboutTitle.Parent then
-        AboutTitle.TextColor3 = Theme.Text
-    end
-    if AboutVersion and AboutVersion.Parent then
-        AboutVersion.TextColor3 = Theme.Accent
     end
 end
 
@@ -875,7 +718,7 @@ local function AddToggle(parent, title, initial, callback, order)
     end)
     Register({ Type = "ToggleRow", Obj = row, Label = label, Track = track })
     return {
-        Row = row, SetState = updateVisual,
+        Row = row, SetState = updateVisual, Callback = callback,
         Lock = function() hitbox.Active = false; row.BackgroundTransparency = 0.4 end,
         Unlock = function() hitbox.Active = true; row.BackgroundTransparency = 0 end,
     }
@@ -944,7 +787,7 @@ local function AddSlider(parent, title, initial, min, max, step, callback, order
     table.insert(CombatConnections, ic)
     table.insert(CombatConnections, ie)
     Register({ Type = "Slider", Obj = frame, Label = label, Bar = bar, Fill = fill })
-    return frame
+    return { Frame = frame, SetValue = setValue }
 end
 
 -- ============================================================
@@ -985,7 +828,6 @@ local function StartAimAssist()
     if not AimBound then
         RunService:BindToRenderStep(AimBindName, AIM_PRIORITY, UpdateCamera)
         AimBound = true
-        print("[AimAssist] Ativado — funciona COM ou SEM Shift Lock")
     end
 end
 
@@ -999,7 +841,6 @@ local function StopAimAssist()
         camera.CameraType = OriginalCameraType
         OriginalCameraType = nil
     end
-    print("[AimAssist] Desativado — câmera livre")
 end
 
 -- ============================================================
@@ -1074,82 +915,74 @@ local RightCol = Create("Frame", {
 Create("UIListLayout", { Padding = UDim.new(0,8), SortOrder = Enum.SortOrder.LayoutOrder }, RightCol)
 
 -- ============================================================
--- INJEÇÃO — ESQUERDA
+-- INJEÇÃO — ESQUERDA (Sheriff/Hero)
 -- ============================================================
 AddHeader(LeftCol, "🎯 SHERIFF / HERO", 1)
 
-AddToggle(LeftCol, "Aim Assist (só Murderer)", false, function(state)
+CombatToggles.AimAssist = AddToggle(LeftCol, "Aim Assist (só Murderer)", false, function(state)
     CombatState.AimAssist = state
     if state then StartAimAssist() else StopAimAssist() end
 end, 2)
 
-AddToggle(LeftCol, "Auto Shot (Murderer)", false, function(state)
+CombatToggles.AutoShot = AddToggle(LeftCol, "Auto Shot (Murderer)", false, function(state)
     CombatState.AutoShot = state
     if state then StartAutoShot() end
 end, 3)
 
-AddToggle(LeftCol, "Auto Grab Gun", false, function(state)
+CombatToggles.AutoGrab = AddToggle(LeftCol, "Auto Grab Gun", false, function(state)
     CombatState.AutoGrab = state
     if state then StartAutoGrab() end
 end, 4)
 
-AddToggle(LeftCol, "🎯 Botão Flutuante Shot", false, function(state)
+CombatToggles.FloatShot = AddToggle(LeftCol, "🎯 Botão Flutuante Shot", false, function(state)
     CombatState.FloatShot = state
     if state then CreateFloatingShot()
     elseif FloatingBtnShot then FloatingBtnShot:Destroy(); FloatingBtnShot = nil end
 end, 5)
 
-AddToggle(LeftCol, "🔫 Botão Flutuante Grab Gun", false, function(state)
+CombatToggles.FloatGrab = AddToggle(LeftCol, "🔫 Botão Flutuante Grab Gun", false, function(state)
     CombatState.FloatGrab = state
     if state then CreateFloatingGrab()
     elseif FloatingBtnGrab then FloatingBtnGrab:Destroy(); FloatingBtnGrab = nil end
 end, 6)
 
 -- ============================================================
--- INJEÇÃO — DIREITA
+-- INJEÇÃO — DIREITA (Murderer)
 -- ============================================================
 AddHeader(RightCol, "🔪 MURDERER", 1)
 
-AddToggle(RightCol, "Hitbox Expander", false, function(state)
+CombatToggles.HitboxExpander = AddToggle(RightCol, "Hitbox Expander", false, function(state)
     CombatState.HitboxExpander = state
     if not state then UpdateHitboxes() end
 end, 2)
 
-AddSlider(RightCol, "Hitbox Size", 4, 2, 20, 1, function(val)
+CombatSliders.HitboxSize = AddSlider(RightCol, "Hitbox Size", 4, 2, 20, 1, function(val)
     CombatState.HitboxSize = val
     if CombatState.HitboxExpander then UpdateHitboxes() end
 end, 3)
 
-AddToggle(RightCol, "🩸 Kill Aura", false, function(state)
+CombatToggles.KillAura = AddToggle(RightCol, "🩸 Kill Aura", false, function(state)
     CombatState.KillAura = state
     if state then StartKillAura() end
 end, 4)
 
-AddSlider(RightCol, "Kill Aura Range", 10, 5, 30, 1, function(val)
+CombatSliders.KillAuraRange = AddSlider(RightCol, "Kill Aura Range", 10, 5, 30, 1, function(val)
     CombatState.KillAuraRange = val
 end, 5)
 
-AddToggle(RightCol, "Auto Kill All", false, function(state)
+CombatToggles.AutoKill = AddToggle(RightCol, "Auto Kill All", false, function(state)
     CombatState.AutoKill = state
     if state then StartAutoKill() end
 end, 6)
 
-AddToggle(RightCol, "🔪 Botão Flutuante Kill All", false, function(state)
+CombatToggles.FloatKill = AddToggle(RightCol, "🔪 Botão Flutuante Kill All", false, function(state)
     CombatState.FloatKill = state
     if state then CreateFloatingKill()
     elseif FloatingBtnKill then FloatingBtnKill:Destroy(); FloatingBtnKill = nil end
 end, 7)
 
 -- ============================================================
--- ✅ INJETA A VERSÃO NO ABOUT
--- ============================================================
-task.spawn(function()
-    task.wait(0.5)  -- dá tempo pro hub montar o ABOUT
-    pcall(InjectAboutVersion)
-end)
-
--- ============================================================
--- LOOPS
+-- LOOPS DE HITBOX
 -- ============================================================
 task.spawn(function()
     while ScreenGui.Parent do
@@ -1158,6 +991,9 @@ task.spawn(function()
     end
 end)
 
+-- ============================================================
+-- LOOP DE TEMA
+-- ============================================================
 task.spawn(function()
     local lastTheme = CurrentThemeName
     while ScreenGui.Parent and Main.Parent do
@@ -1167,25 +1003,8 @@ task.spawn(function()
             Theme = Themes[newName] or Themes.Noturno
             CurrentThemeName = newName
             ReapplyTheme()
-            print("[" .. HUB_NAME .. "] Extensão COMBATE -> tema: " .. newName)
         end
         task.wait(1)
-    end
-end)
-
--- Garante que o ABOUT continua com a versão correta
-task.spawn(function()
-    while ScreenGui.Parent do
-        pcall(function()
-            if not AboutCard or not AboutCard.Parent then
-                InjectAboutVersion()
-            elseif AboutVersion and AboutVersion.Parent then
-                if AboutVersion.Text ~= "Versão: " .. EXT_VERSION then
-                    AboutVersion.Text = "Versão: " .. EXT_VERSION
-                end
-            end
-        end)
-        task.wait(3)
     end
 end)
 
@@ -1200,7 +1019,6 @@ if RoundStart and RoundStart:IsA("RemoteEvent") then
         if CombatState.FloatShot and not FloatingBtnShot then CreateFloatingShot() end
         if CombatState.FloatGrab and not FloatingBtnGrab then CreateFloatingGrab() end
         if CombatState.FloatKill and not FloatingBtnKill then CreateFloatingKill() end
-        pcall(InjectAboutVersion)
     end)
 end
 
@@ -1211,7 +1029,7 @@ pcall(function()
 end)
 
 -- ============================================================
--- LIMPEZA
+-- CLEANUP
 -- ============================================================
 ScreenGui.AncestryChanged:Connect(function()
     if not ScreenGui.Parent then
@@ -1238,11 +1056,65 @@ ScreenGui.AncestryChanged:Connect(function()
         if FloatingBtnGrab then FloatingBtnGrab:Destroy() end
         if FloatingBtnKill then FloatingBtnKill:Destroy() end
 
-        -- Remove a injeção no ABOUT
-        pcall(RemoveAboutInjection)
+        -- Remove do registry
+        if _G.NoturnoHub_Extensions then
+            _G.NoturnoHub_Extensions["Combat"] = nil
+        end
     end
 end)
 
+-- ============================================================
+-- ✅ REGISTRO NO HUB (SAVE SYSTEM)
+-- ============================================================
+if _G.NoturnoHub_Extensions then
+    _G.NoturnoHub_Extensions["Combat"] = {
+        GetSettings = function()
+            return {
+                AimAssist = CombatState.AimAssist,
+                HitboxExpander = CombatState.HitboxExpander,
+                HitboxSize = CombatState.HitboxSize,
+                KillAura = CombatState.KillAura,
+                KillAuraRange = CombatState.KillAuraRange,
+                AutoShot = CombatState.AutoShot,
+                AutoGrab = CombatState.AutoGrab,
+                AutoKill = CombatState.AutoKill,
+                FloatShot = CombatState.FloatShot,
+                FloatKill = CombatState.FloatKill,
+                FloatGrab = CombatState.FloatGrab,
+            }
+        end,
+        SetSettings = function(data)
+            if type(data) ~= "table" then return end
+            -- Sliders primeiro
+            if type(data.HitboxSize) == "number" and CombatSliders.HitboxSize then
+                pcall(CombatSliders.HitboxSize.SetValue, data.HitboxSize)
+            end
+            if type(data.KillAuraRange) == "number" and CombatSliders.KillAuraRange then
+                pcall(CombatSliders.KillAuraRange.SetValue, data.KillAuraRange)
+            end
+            -- Toggles (dispara callback que reativa features)
+            for key, value in pairs(data) do
+                if type(value) == "boolean" then
+                    local toggle = CombatToggles[key]
+                    if toggle then
+                        pcall(toggle.SetState, value)
+                        if toggle.Callback then
+                            pcall(toggle.Callback, value)
+                        end
+                    end
+                end
+            end
+            print("[Combat] Configurações carregadas do save")
+        end
+    }
+    -- Aplica config pendente se o hub já tinha carregado uma
+    if _G.NoturnoHub_LastLoaded and _G.NoturnoHub_LastLoaded["Combat"] then
+        task.spawn(function()
+            task.wait(0.5)
+            pcall(_G.NoturnoHub_Extensions["Combat"].SetSettings, _G.NoturnoHub_LastLoaded["Combat"])
+        end)
+    end
+end
+
 print("[" .. HUB_NAME .. "] Extensão COMBATE v" .. EXT_VERSION .. " | Tema: " .. CurrentThemeName)
-print("[About] Versão da extensão injetada no Indicador 2")
-print("[KillAura] Modo NoTP ativo — não teleporta | Range padrão: 10 studs | Só ativa com faca")
+print("[Save] Registrado no registry — salva junto com o hub")
