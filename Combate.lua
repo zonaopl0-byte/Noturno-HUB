@@ -1,24 +1,17 @@
 --[[
     NOTURNO HUB - EXTENSÃO: ABA COMBATE
-     Versão: 0.3.0
-     Requer: NOTURNO HUB v0.9.9+ (com registry de extensões)
+     Versão: 0.2.9
+     Requer: NOTURNO HUB v0.9.6+ já carregado
 
-     Novidades v0.3.0:
-       ✅ Integração com Save System do Hub (v0.9.9+)
-       ✅ Salva/carrega: Kill Aura, Hitbox, Auto Shot, Auto Grab,
-          Auto Kill, Botões Flutuantes
-       ✅ Kill Aura NoTP (não teleporta)
-       ✅ IsBusy separado (Stab / Grab / Shot)
-       ✅ Verificação de alvo vivo
-       ✅ task.cancel nos loops
-
-     Herdado v0.2.9:
-       - Layout 2 colunas (Sheriff / Murderer)
-       - Botões flutuantes (Shot / Grab / Kill)
+     Fixes v0.2.9 (aplicados sobre v2.8):
+       ✅ Kill Aura usa StabTargetNoTP (não teleporta mais)
+       ✅ IsBusy separado por feature (Stab / Grab / Shot)
+       ✅ Verificação de alvo vivo no loop Kill Aura
+       ✅ Loops com task.cancel (não duplicam ao religar)
 ]]
 
 local HUB_NAME = "NOTURNO HUB"
-local EXT_VERSION = "0.3.0"
+local EXT_VERSION = "0.2.9"
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -36,7 +29,7 @@ local AIM_SMOOTH = false
 local AIM_PRIORITY = Enum.RenderPriority.Camera.Value + 1
 
 -- ============================================================
--- PALETA
+-- PALETA OFICIAL
 -- ============================================================
 local Themes = {
     Noturno = { Main = Color3.fromRGB(28,22,40), Header = Color3.fromRGB(58,38,92),
@@ -136,16 +129,10 @@ local CombatState = {
 local CombatConnections = {}
 local AllUIElements = {}
 
--- ✅ Refs pros toggles/sliders (necessário pro save)
-local CombatToggles = {}
-local CombatSliders = {}
-
--- IsBusy separado
 local IsBusyStab = false
 local IsBusyGrab = false
 local IsBusyShot = false
 
--- Handles das tasks
 local KillAuraTask = nil
 local AutoShotTask = nil
 local AutoGrabTask = nil
@@ -718,7 +705,7 @@ local function AddToggle(parent, title, initial, callback, order)
     end)
     Register({ Type = "ToggleRow", Obj = row, Label = label, Track = track })
     return {
-        Row = row, SetState = updateVisual, Callback = callback,
+        Row = row, SetState = updateVisual,
         Lock = function() hitbox.Active = false; row.BackgroundTransparency = 0.4 end,
         Unlock = function() hitbox.Active = true; row.BackgroundTransparency = 0 end,
     }
@@ -787,7 +774,7 @@ local function AddSlider(parent, title, initial, min, max, step, callback, order
     table.insert(CombatConnections, ic)
     table.insert(CombatConnections, ie)
     Register({ Type = "Slider", Obj = frame, Label = label, Bar = bar, Fill = fill })
-    return { Frame = frame, SetValue = setValue }
+    return frame
 end
 
 -- ============================================================
@@ -828,6 +815,7 @@ local function StartAimAssist()
     if not AimBound then
         RunService:BindToRenderStep(AimBindName, AIM_PRIORITY, UpdateCamera)
         AimBound = true
+        print("[AimAssist] Ativado — funciona COM ou SEM Shift Lock")
     end
 end
 
@@ -841,6 +829,7 @@ local function StopAimAssist()
         camera.CameraType = OriginalCameraType
         OriginalCameraType = nil
     end
+    print("[AimAssist] Desativado — câmera livre")
 end
 
 -- ============================================================
@@ -915,74 +904,74 @@ local RightCol = Create("Frame", {
 Create("UIListLayout", { Padding = UDim.new(0,8), SortOrder = Enum.SortOrder.LayoutOrder }, RightCol)
 
 -- ============================================================
--- INJEÇÃO — ESQUERDA (Sheriff/Hero)
+-- INJEÇÃO — ESQUERDA
 -- ============================================================
 AddHeader(LeftCol, "🎯 SHERIFF / HERO", 1)
 
-CombatToggles.AimAssist = AddToggle(LeftCol, "Aim Assist (só Murderer)", false, function(state)
+AddToggle(LeftCol, "Aim Assist (só Murderer)", false, function(state)
     CombatState.AimAssist = state
     if state then StartAimAssist() else StopAimAssist() end
 end, 2)
 
-CombatToggles.AutoShot = AddToggle(LeftCol, "Auto Shot (Murderer)", false, function(state)
+AddToggle(LeftCol, "Auto Shot (Murderer)", false, function(state)
     CombatState.AutoShot = state
     if state then StartAutoShot() end
 end, 3)
 
-CombatToggles.AutoGrab = AddToggle(LeftCol, "Auto Grab Gun", false, function(state)
+AddToggle(LeftCol, "Auto Grab Gun", false, function(state)
     CombatState.AutoGrab = state
     if state then StartAutoGrab() end
 end, 4)
 
-CombatToggles.FloatShot = AddToggle(LeftCol, "🎯 Botão Flutuante Shot", false, function(state)
+AddToggle(LeftCol, "🎯 Botão Flutuante Shot", false, function(state)
     CombatState.FloatShot = state
     if state then CreateFloatingShot()
     elseif FloatingBtnShot then FloatingBtnShot:Destroy(); FloatingBtnShot = nil end
 end, 5)
 
-CombatToggles.FloatGrab = AddToggle(LeftCol, "🔫 Botão Flutuante Grab Gun", false, function(state)
+AddToggle(LeftCol, "🔫 Botão Flutuante Grab Gun", false, function(state)
     CombatState.FloatGrab = state
     if state then CreateFloatingGrab()
     elseif FloatingBtnGrab then FloatingBtnGrab:Destroy(); FloatingBtnGrab = nil end
 end, 6)
 
 -- ============================================================
--- INJEÇÃO — DIREITA (Murderer)
+-- INJEÇÃO — DIREITA
 -- ============================================================
 AddHeader(RightCol, "🔪 MURDERER", 1)
 
-CombatToggles.HitboxExpander = AddToggle(RightCol, "Hitbox Expander", false, function(state)
+AddToggle(RightCol, "Hitbox Expander", false, function(state)
     CombatState.HitboxExpander = state
     if not state then UpdateHitboxes() end
 end, 2)
 
-CombatSliders.HitboxSize = AddSlider(RightCol, "Hitbox Size", 4, 2, 20, 1, function(val)
+AddSlider(RightCol, "Hitbox Size", 4, 2, 20, 1, function(val)
     CombatState.HitboxSize = val
     if CombatState.HitboxExpander then UpdateHitboxes() end
 end, 3)
 
-CombatToggles.KillAura = AddToggle(RightCol, "🩸 Kill Aura", false, function(state)
+AddToggle(RightCol, "🩸 Kill Aura", false, function(state)
     CombatState.KillAura = state
     if state then StartKillAura() end
 end, 4)
 
-CombatSliders.KillAuraRange = AddSlider(RightCol, "Kill Aura Range", 10, 5, 30, 1, function(val)
+AddSlider(RightCol, "Kill Aura Range", 10, 5, 30, 1, function(val)
     CombatState.KillAuraRange = val
 end, 5)
 
-CombatToggles.AutoKill = AddToggle(RightCol, "Auto Kill All", false, function(state)
+AddToggle(RightCol, "Auto Kill All", false, function(state)
     CombatState.AutoKill = state
     if state then StartAutoKill() end
 end, 6)
 
-CombatToggles.FloatKill = AddToggle(RightCol, "🔪 Botão Flutuante Kill All", false, function(state)
+AddToggle(RightCol, "🔪 Botão Flutuante Kill All", false, function(state)
     CombatState.FloatKill = state
     if state then CreateFloatingKill()
     elseif FloatingBtnKill then FloatingBtnKill:Destroy(); FloatingBtnKill = nil end
 end, 7)
 
 -- ============================================================
--- LOOPS DE HITBOX
+-- LOOPS
 -- ============================================================
 task.spawn(function()
     while ScreenGui.Parent do
@@ -991,9 +980,6 @@ task.spawn(function()
     end
 end)
 
--- ============================================================
--- LOOP DE TEMA
--- ============================================================
 task.spawn(function()
     local lastTheme = CurrentThemeName
     while ScreenGui.Parent and Main.Parent do
@@ -1003,6 +989,7 @@ task.spawn(function()
             Theme = Themes[newName] or Themes.Noturno
             CurrentThemeName = newName
             ReapplyTheme()
+            print("[" .. HUB_NAME .. "] Extensão COMBATE -> tema: " .. newName)
         end
         task.wait(1)
     end
@@ -1029,7 +1016,7 @@ pcall(function()
 end)
 
 -- ============================================================
--- CLEANUP
+-- LIMPEZA
 -- ============================================================
 ScreenGui.AncestryChanged:Connect(function()
     if not ScreenGui.Parent then
@@ -1055,66 +1042,8 @@ ScreenGui.AncestryChanged:Connect(function()
         if FloatingBtnShot then FloatingBtnShot:Destroy() end
         if FloatingBtnGrab then FloatingBtnGrab:Destroy() end
         if FloatingBtnKill then FloatingBtnKill:Destroy() end
-
-        -- Remove do registry
-        if _G.NoturnoHub_Extensions then
-            _G.NoturnoHub_Extensions["Combat"] = nil
-        end
     end
 end)
 
--- ============================================================
--- ✅ REGISTRO NO HUB (SAVE SYSTEM)
--- ============================================================
-if _G.NoturnoHub_Extensions then
-    _G.NoturnoHub_Extensions["Combat"] = {
-        GetSettings = function()
-            return {
-                AimAssist = CombatState.AimAssist,
-                HitboxExpander = CombatState.HitboxExpander,
-                HitboxSize = CombatState.HitboxSize,
-                KillAura = CombatState.KillAura,
-                KillAuraRange = CombatState.KillAuraRange,
-                AutoShot = CombatState.AutoShot,
-                AutoGrab = CombatState.AutoGrab,
-                AutoKill = CombatState.AutoKill,
-                FloatShot = CombatState.FloatShot,
-                FloatKill = CombatState.FloatKill,
-                FloatGrab = CombatState.FloatGrab,
-            }
-        end,
-        SetSettings = function(data)
-            if type(data) ~= "table" then return end
-            -- Sliders primeiro
-            if type(data.HitboxSize) == "number" and CombatSliders.HitboxSize then
-                pcall(CombatSliders.HitboxSize.SetValue, data.HitboxSize)
-            end
-            if type(data.KillAuraRange) == "number" and CombatSliders.KillAuraRange then
-                pcall(CombatSliders.KillAuraRange.SetValue, data.KillAuraRange)
-            end
-            -- Toggles (dispara callback que reativa features)
-            for key, value in pairs(data) do
-                if type(value) == "boolean" then
-                    local toggle = CombatToggles[key]
-                    if toggle then
-                        pcall(toggle.SetState, value)
-                        if toggle.Callback then
-                            pcall(toggle.Callback, value)
-                        end
-                    end
-                end
-            end
-            print("[Combat] Configurações carregadas do save")
-        end
-    }
-    -- Aplica config pendente se o hub já tinha carregado uma
-    if _G.NoturnoHub_LastLoaded and _G.NoturnoHub_LastLoaded["Combat"] then
-        task.spawn(function()
-            task.wait(0.5)
-            pcall(_G.NoturnoHub_Extensions["Combat"].SetSettings, _G.NoturnoHub_LastLoaded["Combat"])
-        end)
-    end
-end
-
 print("[" .. HUB_NAME .. "] Extensão COMBATE v" .. EXT_VERSION .. " | Tema: " .. CurrentThemeName)
-print("[Save] Registrado no registry — salva junto com o hub")
+print("[KillAura] Modo NoTP ativo — não teleporta | Range padrão: 10 studs | Só ativa com faca")
