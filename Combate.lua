@@ -1,13 +1,17 @@
 --[[
     NOTURNO HUB - EXTENSÃO: ABA COMBATE
-     Versão: 0.2.9
+     Versão: 0.2.9.1
      Requer: NOTURNO HUB v0.9.6+ já carregado
 
-     Fixes v0.2.9 (aplicados sobre v2.8):
-       ✅ Kill Aura usa StabTargetNoTP (não teleporta mais)
-       ✅ IsBusy separado por feature (Stab / Grab / Shot)
-       ✅ Verificação de alvo vivo no loop Kill Aura
-       ✅ Loops com task.cancel (não duplicam ao religar)
+     Novidades v0.2.9.1:
+       ✅ Injeta versão no ABOUT automaticamente (Indicador 2)
+       ✅ Remove do ABOUT ao desexecutar
+
+     Herdado v0.2.9:
+       ✅ Kill Aura NoTP (não teleporta)
+       ✅ IsBusy separado (Stab / Grab / Shot)
+       ✅ Verificação de alvo vivo
+       ✅ task.cancel nos loops
 ]]
 
 local HUB_NAME = "NOTURNO HUB"
@@ -70,6 +74,8 @@ end
 local Main = ScreenGui:FindFirstChild("Main")
 local PagesContainer = Main and Main:FindFirstChild("PagesContainer")
 local CombatPage = PagesContainer and PagesContainer:FindFirstChild("COMBATE")
+local AboutPage = PagesContainer and PagesContainer:FindFirstChild("ABOUT")
+
 if not CombatPage then
     warn("[" .. HUB_NAME .. "] Aba COMBATE não encontrada.")
     return
@@ -138,6 +144,12 @@ local AutoShotTask = nil
 local AutoGrabTask = nil
 local AutoKillTask = nil
 
+-- ✅ ABOUT state
+local AboutCard = nil
+local AboutCardStroke = nil
+local AboutTitle = nil
+local AboutVersion = nil
+
 local function Register(entry) table.insert(AllUIElements, entry) end
 
 local function ApplyThemeToEntry(entry)
@@ -174,6 +186,139 @@ local function ReapplyTheme()
     for _, entry in ipairs(AllUIElements) do
         pcall(ApplyThemeToEntry, entry)
     end
+    -- ✅ ABOUT
+    if AboutCard and AboutCard.Parent then AboutCard.BackgroundColor3 = Theme.Button end
+    if AboutCardStroke and AboutCardStroke.Parent then AboutCardStroke.Color = Theme.Accent end
+    if AboutTitle and AboutTitle.Parent then AboutTitle.TextColor3 = Theme.Text end
+    if AboutVersion and AboutVersion.Parent then AboutVersion.TextColor3 = Theme.Accent end
+end
+
+-- ============================================================
+-- ✅ INJEÇÃO NO ABOUT (Indicador 2)
+-- ============================================================
+local function FindAboutRows()
+    if not AboutPage then
+        AboutPage = PagesContainer and PagesContainer:FindFirstChild("ABOUT")
+    end
+    if not AboutPage then return nil end
+    return AboutPage:FindFirstChild("Rows")
+end
+
+local function FindEmptySlotInRows(rows)
+    if not rows then return nil end
+    local lines = {}
+    for _, child in ipairs(rows:GetChildren()) do
+        if child:IsA("Frame") then
+            local layout = child:FindFirstChildOfClass("UIListLayout")
+            if layout and layout.FillDirection == Enum.FillDirection.Horizontal then
+                table.insert(lines, child)
+            end
+        end
+    end
+    table.sort(lines, function(a,b) return a.LayoutOrder < b.LayoutOrder end)
+
+    for _, line in ipairs(lines) do
+        for _, card in ipairs(line:GetChildren()) do
+            if card:IsA("Frame") then
+                local injectedBy = card:GetAttribute("InjectedBy")
+                if not injectedBy or injectedBy == "Combat" then
+                    local hasText = false
+                    for _, desc in ipairs(card:GetDescendants()) do
+                        if desc:IsA("TextLabel") and desc.Text and desc.Text ~= "" then
+                            hasText = true
+                            break
+                        end
+                    end
+                    if not hasText then
+                        return card
+                    end
+                end
+            end
+        end
+    end
+    return nil
+end
+
+local function CreateAboutCard(rows)
+    if not rows then return nil end
+    local card = Create("Frame", {
+        Size = UDim2.new(0.47,0,0,70),
+        BackgroundColor3 = Theme.Button,
+        BorderSizePixel = 0,
+        LayoutOrder = 950,
+    }, rows)
+    Create("UICorner", { CornerRadius = UDim.new(0,8) }, card)
+    local stroke = Create("UIStroke", { Color = Theme.Accent, Thickness = 1.2, Transparency = 0.5 }, card)
+    return card, stroke
+end
+
+local function FillAboutCard(card, stroke)
+    if not card or not card.Parent then return end
+    for _, child in ipairs(card:GetChildren()) do
+        if child:IsA("TextLabel") then child:Destroy() end
+    end
+    card:SetAttribute("InjectedBy", "Combat")
+
+    AboutTitle = Create("TextLabel", {
+        Size = UDim2.new(1,0,0,26),
+        Position = UDim2.fromOffset(0,12),
+        BackgroundTransparency = 1,
+        Text = "🎯 Combate",
+        TextColor3 = Theme.Text,
+        TextSize = 14,
+        Font = Enum.Font.GothamBold,
+        TextXAlignment = Enum.TextXAlignment.Center
+    }, card)
+
+    AboutVersion = Create("TextLabel", {
+        Size = UDim2.new(1,0,0,20),
+        Position = UDim2.fromOffset(0,38),
+        BackgroundTransparency = 1,
+        Text = "Versão: " .. EXT_VERSION,
+        TextColor3 = Theme.Accent,
+        TextSize = 12,
+        Font = Enum.Font.GothamBold,
+        TextXAlignment = Enum.TextXAlignment.Center
+    }, card)
+
+    AboutCard = card
+    AboutCardStroke = stroke
+end
+
+local function InjectAboutVersion()
+    local rows = FindAboutRows()
+    if not rows then return end
+    if AboutCard and AboutCard.Parent then
+        if AboutVersion and AboutVersion.Parent then
+            AboutVersion.Text = "Versão: " .. EXT_VERSION
+            AboutVersion.TextColor3 = Theme.Accent
+        end
+        if AboutTitle and AboutTitle.Parent then AboutTitle.TextColor3 = Theme.Text end
+        if AboutCardStroke and AboutCardStroke.Parent then AboutCardStroke.Color = Theme.Accent end
+        if AboutCard then AboutCard.BackgroundColor3 = Theme.Button end
+        return
+    end
+    local slot = FindEmptySlotInRows(rows)
+    local stroke
+    if slot then
+        stroke = slot:FindFirstChildOfClass("UIStroke")
+        FillAboutCard(slot, stroke)
+        print("[" .. HUB_NAME .. "] Indicador Combate injetado em slot existente.")
+    else
+        local newCard, newStroke = CreateAboutCard(rows)
+        if newCard then
+            FillAboutCard(newCard, newStroke)
+            print("[" .. HUB_NAME .. "] Indicador Combate criado em novo card.")
+        end
+    end
+end
+
+local function RemoveAboutInjection()
+    if AboutCard and AboutCard.Parent then AboutCard:Destroy() end
+    AboutCard = nil
+    AboutCardStroke = nil
+    AboutTitle = nil
+    AboutVersion = nil
 end
 
 -- ============================================================
@@ -971,6 +1116,30 @@ AddToggle(RightCol, "🔪 Botão Flutuante Kill All", false, function(state)
 end, 7)
 
 -- ============================================================
+-- ✅ INJETA NO ABOUT
+-- ============================================================
+task.spawn(function()
+    task.wait(0.6)
+    pcall(InjectAboutVersion)
+end)
+
+-- Manutenção do ABOUT
+task.spawn(function()
+    while ScreenGui.Parent do
+        pcall(function()
+            if not AboutCard or not AboutCard.Parent then
+                InjectAboutVersion()
+            elseif AboutVersion and AboutVersion.Parent then
+                if AboutVersion.Text ~= "Versão: " .. EXT_VERSION then
+                    AboutVersion.Text = "Versão: " .. EXT_VERSION
+                end
+            end
+        end)
+        task.wait(3)
+    end
+end)
+
+-- ============================================================
 -- LOOPS
 -- ============================================================
 task.spawn(function()
@@ -989,7 +1158,6 @@ task.spawn(function()
             Theme = Themes[newName] or Themes.Noturno
             CurrentThemeName = newName
             ReapplyTheme()
-            print("[" .. HUB_NAME .. "] Extensão COMBATE -> tema: " .. newName)
         end
         task.wait(1)
     end
@@ -1006,6 +1174,7 @@ if RoundStart and RoundStart:IsA("RemoteEvent") then
         if CombatState.FloatShot and not FloatingBtnShot then CreateFloatingShot() end
         if CombatState.FloatGrab and not FloatingBtnGrab then CreateFloatingGrab() end
         if CombatState.FloatKill and not FloatingBtnKill then CreateFloatingKill() end
+        pcall(InjectAboutVersion)
     end)
 end
 
@@ -1042,8 +1211,10 @@ ScreenGui.AncestryChanged:Connect(function()
         if FloatingBtnShot then FloatingBtnShot:Destroy() end
         if FloatingBtnGrab then FloatingBtnGrab:Destroy() end
         if FloatingBtnKill then FloatingBtnKill:Destroy() end
+
+        pcall(RemoveAboutInjection)
     end
 end)
 
 print("[" .. HUB_NAME .. "] Extensão COMBATE v" .. EXT_VERSION .. " | Tema: " .. CurrentThemeName)
-print("[KillAura] Modo NoTP ativo — não teleporta | Range padrão: 10 studs | Só ativa com faca")
+print("[About] Versão do Combate injetada no Indicador 2")
