@@ -1,21 +1,17 @@
 --[[
     NOTURNO HUB - PAINEL PRINCIPAL
-    Versão: 0.9.9
+    Versão: 0.9.8
 
-    Novidades v0.9.9:
-    - ✅ Save system agora salva/carrega configurações das extensões
-      (Combat, Troll, Farm) via registry _G.NoturnoHub_Extensions
-
-    Herdado v0.9.8:
+    Alterações v0.9.8:
     - Anti-Fling portado do Mario Hub
     - Contador de moedas usa emoji 💲
     - FIX: TpToMap não teleporta mais para o lobby / fora do mapa
-    - ABOUT: 4 indicadores (47%, alinhados à direita)
+    - ABOUT: 4 indicadores (47% cada, alinhados à direita) — Indicador 1 = Painel HUB + versão, 2/3/4 vazios
     - Card criador (94% centralizado)
 ]]
 
 local HUB_NAME = "NOTURNO HUB"
-local HUB_VERSION = "0.9.9"
+local HUB_VERSION = "0.9.8"
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -56,7 +52,8 @@ local Settings = {
     WalkSpeedEnabled = false, JumpPowerEnabled = false,
     ESP_Players = false, ESP_Gun = false, ESP_Coin = false,
     XRay = false, Fullbright = false,
-    FlingVelocityCap = 120, FlingAngularCap = 10
+    FlingVelocityCap = 120,
+    FlingAngularCap = 10
 }
 
 -- ========== VARIÁVEIS GLOBAIS ==========
@@ -65,11 +62,14 @@ local AntiFlingConnection, AntiAfkConnection, InfJumpConnection
 local OriginalCollision = {}
 local InfJumpCount = 0
 local LastJumpTime = 0
+
 local FlingSavedCollide = {}
+
 local SteppedConnections = {}
 local XRayOriginal = {}
 local XRayConnection
 local FullbrightOriginal = nil
+
 local RoleCache = {}
 local ESPObjects = {}
 local ESPGun = { Target = nil, Highlight = nil, Billboard = nil }
@@ -77,13 +77,11 @@ local ESPCoins = {}
 local RoleFetchBusy = false
 local LastRoleFetch = 0
 local RoleFetchStart = 0
+
 local SavedWaypoint = nil
+
 local ToggleButtons = {}
 local ResetAllToggles = nil
-
--- ✅ Registry global pra extensões (SAVE SYSTEM)
-_G.NoturnoHub_Extensions = _G.NoturnoHub_Extensions or {}
-_G.NoturnoHub_LastLoaded = _G.NoturnoHub_LastLoaded or nil
 
 -- ========== UTIL ==========
 local function Create(className, properties, parent)
@@ -99,7 +97,7 @@ local oldLoader = PlayerGui:FindFirstChild("NoturnoLoader")
 if oldLoader then oldLoader:Destroy() end
 
 -- ============================================================
--- LOADER
+-- TELA DE CARREGAMENTO
 -- ============================================================
 local LoaderGui = Create("ScreenGui", { Name = "NoturnoLoader", ResetOnSpawn = false, IgnoreGuiInset = true, DisplayOrder = 999, ZIndexBehavior = Enum.ZIndexBehavior.Sibling }, PlayerGui)
 local bg = Create("Frame", { Name = "BG", Size = UDim2.fromScale(1,1), BackgroundColor3 = Color3.fromRGB(15,10,20), BorderSizePixel = 0 }, LoaderGui)
@@ -112,7 +110,7 @@ Create("UICorner", { CornerRadius = UDim.new(1,0) }, barFill)
 TweenService:Create(barFill, TweenInfo.new(DURACAO,Enum.EasingStyle.Linear), {Size = UDim2.new(1,0,1,0)}):Play()
 
 -- ============================================================
--- PAINEL
+-- PAINEL PRINCIPAL
 -- ============================================================
 local ScreenGui = Create("ScreenGui", { Name = "NoturnoHub", ResetOnSpawn = false, ZIndexBehavior = Enum.ZIndexBehavior.Sibling }, PlayerGui)
 local Theme = Themes[CurrentTheme]
@@ -141,17 +139,25 @@ Create("UIStroke", { Color = Theme.Accent, Thickness = 1.5, Transparency = 0.4 }
 
 -- ========== CONTADOR DE MOEDAS ==========
 local CoinCounterFrame = Create("Frame", {
-    Name = "CoinCounter", Size = UDim2.fromOffset(120, 40),
+    Name = "CoinCounter",
+    Size = UDim2.fromOffset(120, 40),
     Position = UDim2.new(1, -140, 1, -60),
-    BackgroundColor3 = Color3.fromRGB(20, 20, 25), BackgroundTransparency = 0.3,
-    BorderSizePixel = 0, Visible = false, ZIndex = 100
+    BackgroundColor3 = Color3.fromRGB(20, 20, 25),
+    BackgroundTransparency = 0.3,
+    BorderSizePixel = 0,
+    Visible = false,
+    ZIndex = 100
 }, ScreenGui)
 Create("UICorner", { CornerRadius = UDim.new(0, 8) }, CoinCounterFrame)
 Create("UIStroke", { Color = Color3.fromRGB(255, 215, 0), Thickness = 1.5, Transparency = 0.3 }, CoinCounterFrame)
 local CoinCounterText = Create("TextLabel", {
-    Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1,
-    Text = "💲 Moedas: 0", TextColor3 = Color3.fromRGB(255, 215, 0),
-    TextSize = 14, Font = Enum.Font.GothamBold, TextXAlignment = Enum.TextXAlignment.Center
+    Size = UDim2.fromScale(1, 1),
+    BackgroundTransparency = 1,
+    Text = "💲 Moedas: 0",
+    TextColor3 = Color3.fromRGB(255, 215, 0),
+    TextSize = 14,
+    Font = Enum.Font.GothamBold,
+    TextXAlignment = Enum.TextXAlignment.Center
 }, CoinCounterFrame)
 
 -- ========== ARRASTAR MAIN ==========
@@ -192,7 +198,7 @@ Minimize.MouseButton1Click:Connect(function() Main.Visible = false; Floating.Vis
 Floating.MouseButton1Click:Connect(function() Main.Visible = true; Floating.Visible = false end)
 
 -- ============================================================
--- ESP
+-- SISTEMA DE ESP
 -- ============================================================
 local Remotes = ReplicatedStorage:FindFirstChild("Remotes")
 local Gameplay = Remotes and Remotes:FindFirstChild("Gameplay")
@@ -200,9 +206,12 @@ local RoleRemote = Gameplay and Gameplay:FindFirstChild("GetCurrentPlayerData")
 local RoundStart = Gameplay and Gameplay:FindFirstChild("RoundStart")
 
 local RoleColors = {
-    Innocent = Color3.fromRGB(0,255,70), Murderer = Color3.fromRGB(255,35,35),
-    Sheriff = Color3.fromRGB(40,130,255), Hero = Color3.fromRGB(0,255,255),
-    Dead = Color3.fromRGB(50,50,50), Unknown = Color3.fromRGB(255,255,255)
+    Innocent = Color3.fromRGB(0,255,70),
+    Murderer = Color3.fromRGB(255,35,35),
+    Sheriff = Color3.fromRGB(40,130,255),
+    Hero = Color3.fromRGB(0,255,255),
+    Dead = Color3.fromRGB(50,50,50),
+    Unknown = Color3.fromRGB(255,255,255)
 }
 
 local function NormalizeRole(role)
@@ -332,6 +341,7 @@ local function EnableESP(enabled)
     else for player in pairs(ESPObjects) do RemoveESP(player) end end
 end
 
+-- ESP GUN DROP
 local function RemoveGunDropESP()
     if ESPGun.Highlight then ESPGun.Highlight:Destroy(); ESPGun.Highlight = nil end
     if ESPGun.Billboard then ESPGun.Billboard:Destroy(); ESPGun.Billboard = nil end
@@ -385,6 +395,7 @@ local function EnableGunESP(state)
     if state then UpdateGunDropESP() else RemoveGunDropESP() end
 end
 
+-- ESP COIN
 local function RemoveCoinESP()
     for coin, objects in pairs(ESPCoins) do
         if objects.Highlight then objects.Highlight:Destroy() end
@@ -455,7 +466,7 @@ local function EnableCoinESP(state)
 end
 
 -- ============================================================
--- X-RAY / FULLBRIGHT
+-- X-RAY
 -- ============================================================
 local function IsPlayerCharacterPart(part)
     for _, player in ipairs(Players:GetPlayers()) do
@@ -488,6 +499,9 @@ local function EnableXRay(state)
     end
 end
 
+-- ============================================================
+-- FULLBRIGHT
+-- ============================================================
 local function EnableFullbright(state)
     Settings.Fullbright = state
     if state then
@@ -510,10 +524,13 @@ local function EnableFullbright(state)
 end
 
 -- ============================================================
--- TELEPORTE
+-- TELEPORTE (MM2)
 -- ============================================================
 local TeleportStatus
-local function SetTPStatus(msg) if TeleportStatus and TeleportStatus.Parent then TeleportStatus.Text = "Status: " .. msg end end
+
+local function SetTPStatus(msg)
+    if TeleportStatus and TeleportStatus.Parent then TeleportStatus.Text = "Status: " .. msg end
+end
 
 local function DoTeleport(targetPos)
     local char = LocalPlayer.Character
@@ -559,7 +576,7 @@ local function TpToMurderer()
             TpToPlayer(p); SetTPStatus("TP para o Murderer (" .. p.Name .. ")."); return
         end
     end
-    SetTPStatus("Murderer não encontrado.")
+    SetTPStatus("Murderer não encontrado (ou você é o Murderer).")
 end
 
 local function TpToSheriff()
@@ -569,7 +586,7 @@ local function TpToSheriff()
             TpToPlayer(p); SetTPStatus("TP para o Xerife (" .. p.Name .. ")."); return
         end
     end
-    SetTPStatus("Xerife não encontrado.")
+    SetTPStatus("Xerife não encontrado (ou você é o Xerife).")
 end
 
 local function TpToLobby()
@@ -606,6 +623,7 @@ local function TpToLobby()
     if DoTeleport(lobbyPos) then SetTPStatus("Teleportado para o lobby.") end
 end
 
+-- ✅ TP PARA O MAPA (FIX v0.9.8)
 local function TpToMap()
     local lobbyPos = nil
     local lobbyObj = workspace:FindFirstChild("Lobby")
@@ -617,6 +635,7 @@ local function TpToMap()
             if lp then lobbyPos = lp.Position end
         end
     end
+
     local bestPlayer, bestDist = nil, 0
     for _, p in ipairs(Players:GetPlayers()) do
         if p ~= LocalPlayer then
@@ -625,31 +644,55 @@ local function TpToMap()
             local h = c and c:FindFirstChildOfClass("Humanoid")
             if r and h and h.Health > 0 then
                 local dist = lobbyPos and (r.Position - lobbyPos).Magnitude or 1e9
-                if dist > bestDist then bestDist = dist; bestPlayer = p end
+                if dist > bestDist then
+                    bestDist = dist
+                    bestPlayer = p
+                end
             end
         end
     end
+
     if bestPlayer and (not lobbyPos or bestDist > 60) then
         local r = bestPlayer.Character and bestPlayer.Character:FindFirstChild("HumanoidRootPart")
-        if r and DoTeleport(r.Position) then SetTPStatus("TP para o mapa (via " .. bestPlayer.Name .. ")."); return end
-    end
-    local mapContainer = workspace:FindFirstChild("Map") or workspace:FindFirstChild("Maps") or workspace:FindFirstChild("CurrentMap")
-    if not mapContainer then
-        for _, obj in ipairs(workspace:GetChildren()) do
-            if (obj:IsA("Folder") or obj:IsA("Model")) and obj.Name:lower():find("^map") then mapContainer = obj; break end
+        if r and DoTeleport(r.Position) then
+            SetTPStatus("TP para o mapa (via " .. bestPlayer.Name .. ").")
+            return
         end
     end
-    local mapModel = nil
-    if mapContainer then
-        if mapContainer:IsA("Model") then mapModel = mapContainer
-        elseif mapContainer:IsA("Folder") then
-            for _, child in ipairs(mapContainer:GetChildren()) do
-                if child:IsA("Model") or child:IsA("BasePart") then mapModel = child; break end
+
+    local mapContainer = workspace:FindFirstChild("Map")
+        or workspace:FindFirstChild("Maps")
+        or workspace:FindFirstChild("CurrentMap")
+
+    if not mapContainer then
+        for _, obj in ipairs(workspace:GetChildren()) do
+            if (obj:IsA("Folder") or obj:IsA("Model"))
+                and obj.Name:lower():find("^map") then
+                mapContainer = obj
+                break
             end
         end
     end
+
+    local mapModel = nil
+    if mapContainer then
+        if mapContainer:IsA("Model") then
+            mapModel = mapContainer
+        elseif mapContainer:IsA("Folder") then
+            for _, child in ipairs(mapContainer:GetChildren()) do
+                if child:IsA("Model") or child:IsA("BasePart") then
+                    mapModel = child
+                    break
+                end
+            end
+        end
+    end
+
     if not mapModel then
-        local blacklist = { ["Lobby"] = true, ["Players"] = true, ["Terrain"] = true, ["Camera"] = true }
+        local blacklist = {
+            ["Lobby"] = true, ["Players"] = true,
+            ["Terrain"] = true, ["Camera"] = true
+        }
         local biggest, biggestSize = nil, 0
         for _, obj in ipairs(workspace:GetChildren()) do
             if obj:IsA("Model") and not blacklist[obj.Name] then
@@ -661,33 +704,61 @@ local function TpToMap()
                     local ok, _, size = pcall(function() return obj:GetBoundingBox() end)
                     if ok and size then
                         local volume = size.X * size.Y * size.Z
-                        if volume > biggestSize then biggest, biggestSize = obj, volume end
+                        if volume > biggestSize then
+                            biggest, biggestSize = obj, volume
+                        end
                     end
                 end
             end
         end
         mapModel = biggest
     end
-    if not mapModel then SetTPStatus("Mapa não encontrado."); return end
-    local spawnPos = nil
-    for _, obj in ipairs(mapModel:GetDescendants()) do
-        if obj:IsA("SpawnLocation") and obj.Transparency < 1 then spawnPos = obj.Position; break end
+
+    if not mapModel then
+        SetTPStatus("Mapa não encontrado (você está no lobby?).")
+        return
     end
-    if not spawnPos then
-        for _, obj in ipairs(mapModel:GetDescendants()) do
-            if obj.Name == "HumanoidRootPart" and obj:IsA("BasePart") then spawnPos = obj.Position; break end
+
+    local spawnPos = nil
+
+    for _, obj in ipairs(mapModel:GetDescendants()) do
+        if obj:IsA("SpawnLocation") and obj.Transparency < 1 then
+            spawnPos = obj.Position
+            break
         end
     end
+
+    if not spawnPos then
+        for _, obj in ipairs(mapModel:GetDescendants()) do
+            if obj.Name == "HumanoidRootPart" and obj:IsA("BasePart") then
+                spawnPos = obj.Position
+                break
+            end
+        end
+    end
+
     if not spawnPos and mapModel:IsA("Model") and mapModel.PrimaryPart then
         local pp = mapModel.PrimaryPart
-        if pp.Position.Y > -50 then spawnPos = pp.Position end
+        if pp.Position.Y > -50 then
+            spawnPos = pp.Position
+        end
     end
+
     if not spawnPos then
         local ok, cf, size = pcall(function() return mapModel:GetBoundingBox() end)
-        if ok and cf and size then spawnPos = cf.Position + Vector3.new(0, size.Y * 0.4, 0) end
+        if ok and cf and size then
+            spawnPos = cf.Position + Vector3.new(0, size.Y * 0.4, 0)
+        end
     end
-    if not spawnPos then SetTPStatus("Não foi possível localizar um ponto no mapa."); return end
-    if DoTeleport(spawnPos) then SetTPStatus("Teleportado para o mapa do round.") end
+
+    if not spawnPos then
+        SetTPStatus("Não foi possível localizar um ponto no mapa.")
+        return
+    end
+
+    if DoTeleport(spawnPos) then
+        SetTPStatus("Teleportado para o mapa do round.")
+    end
 end
 
 local function SaveWaypoint()
@@ -713,41 +784,50 @@ local function UnloadHub()
     if FlyConnection then FlyConnection:Disconnect(); FlyConnection = nil end
     if FlyVelocity then FlyVelocity:Destroy(); FlyVelocity = nil end
     if FlyGyro then FlyGyro:Destroy(); FlyGyro = nil end
+
     Settings.Noclip = false
     for part, orig in pairs(OriginalCollision) do
         if part and part.Parent then part.CanCollide = orig end
     end
     table.clear(OriginalCollision)
+
     Settings.AntiFling = false
     if AntiFlingConnection then AntiFlingConnection:Disconnect(); AntiFlingConnection = nil end
     for part, orig in pairs(FlingSavedCollide) do
         if part and part.Parent then part.CanCollide = orig end
     end
     table.clear(FlingSavedCollide)
+
     Settings.AntiAfk = false
     if AntiAfkConnection then AntiAfkConnection:Disconnect(); AntiAfkConnection = nil end
     Settings.InfJump = false
     if InfJumpConnection then InfJumpConnection:Disconnect(); InfJumpConnection = nil end
+
     for _, conn in ipairs(SteppedConnections) do
         if conn then pcall(function() conn:Disconnect() end) end
     end
     table.clear(SteppedConnections)
+
     EnableXRay(false)
     EnableFullbright(false)
+
     Settings.ESP_Players = false
     for player in pairs(ESPObjects) do RemoveESP(player) end
     Settings.ESP_Gun = false; RemoveGunDropESP()
     Settings.ESP_Coin = false; RemoveCoinESP()
+
     if ResetAllToggles then ResetAllToggles() end
+
     local char = LocalPlayer.Character
     local hum = char and char:FindFirstChildOfClass("Humanoid")
     if hum then
         hum.PlatformStand = false; hum.AutoRotate = true
         hum.WalkSpeed = 16; hum.UseJumpPower = true; hum.JumpPower = 50
     end
+
     ScreenGui:Destroy()
     if LoaderGui then LoaderGui:Destroy() end
-    print("[" .. HUB_NAME .. "] Hub desexecutado.")
+    print("[" .. HUB_NAME .. "] Hub desexecutado e todas as funções desativadas.")
 end
 
 local ClosePending = false
@@ -828,6 +908,7 @@ SelectPage("PLAYER")
 -- BOTÕES E SLIDERS
 -- ============================================================
 local SliderObjects = {}
+
 ResetAllToggles = function()
     for key, item in pairs(ToggleButtons) do
         if Settings[key] ~= nil then
@@ -918,6 +999,7 @@ end)
 
 CreateCustomToggle(PlayerPage, "Anti-Fling","AntiFling",function(state)
     if AntiFlingConnection then AntiFlingConnection:Disconnect(); AntiFlingConnection = nil end
+
     if state then
         AntiFlingConnection = RunService.Stepped:Connect(function()
             if not Settings.AntiFling then return end
@@ -927,7 +1009,9 @@ CreateCustomToggle(PlayerPage, "Anti-Fling","AntiFling",function(state)
                 if not character then continue end
                 for _, part in ipairs(character:GetDescendants()) do
                     if part:IsA("BasePart") and part.CanCollide then
-                        if FlingSavedCollide[part] == nil then FlingSavedCollide[part] = part.CanCollide end
+                        if FlingSavedCollide[part] == nil then
+                            FlingSavedCollide[part] = part.CanCollide
+                        end
                         part.CanCollide = false
                     end
                 end
@@ -936,9 +1020,13 @@ CreateCustomToggle(PlayerPage, "Anti-Fling","AntiFling",function(state)
             local root = char and char:FindFirstChild("HumanoidRootPart")
             if not root then return end
             local v = root.AssemblyLinearVelocity
-            if v.Magnitude > Settings.FlingVelocityCap then root.AssemblyLinearVelocity = v.Unit * Settings.FlingVelocityCap end
+            if v.Magnitude > Settings.FlingVelocityCap then
+                root.AssemblyLinearVelocity = v.Unit * Settings.FlingVelocityCap
+            end
             local w = root.AssemblyAngularVelocity
-            if w.Magnitude > Settings.FlingAngularCap then root.AssemblyAngularVelocity = w.Unit * Settings.FlingAngularCap end
+            if w.Magnitude > Settings.FlingAngularCap then
+                root.AssemblyAngularVelocity = w.Unit * Settings.FlingAngularCap
+            end
         end)
     else
         for part, original in pairs(FlingSavedCollide) do
@@ -1096,14 +1184,18 @@ table.insert(SteppedConnections, RunService.Stepped:Connect(function()
     end
 end))
 
--- ========== ABA VISUALS ==========
+-- ============================================================
+-- ABA VISUALS
+-- ============================================================
 CreateCustomToggle(VisualsPage, "ESP Player","ESP_Players",function(state) EnableESP(state) end)
 CreateCustomToggle(VisualsPage, "ESP Gun","ESP_Gun",function(state) EnableGunESP(state) end)
 CreateCustomToggle(VisualsPage, "ESP Coin","ESP_Coin",function(state) EnableCoinESP(state) end)
 CreateCustomToggle(VisualsPage, "X-Ray","XRay",function(state) EnableXRay(state) end)
 CreateCustomToggle(VisualsPage, "FullBright","Fullbright",function(state) EnableFullbright(state) end)
 
--- ========== ABA TELEPORTE ==========
+-- ============================================================
+-- ABA TELEPORTE
+-- ============================================================
 TeleportStatus = Create("TextLabel", {
     Size = UDim2.new(1,-6,0,34), BackgroundTransparency = 1,
     Text = "Status: Pronto.", TextColor3 = Theme.Text, TextSize = 10,
@@ -1169,7 +1261,7 @@ AddButton(TeleportPage.Rows, "🎯 Teleportar para waypoint", function() TpToWay
 AddButton(TeleportPage.Rows, "🗑 Limpar waypoint", function() ClearWaypoint() end)
 
 -- ============================================================
--- LOOPS ESP
+-- LOOPS DE ESP
 -- ============================================================
 task.spawn(function()
     while ScreenGui.Parent do
@@ -1225,6 +1317,10 @@ end
 -- ============================================================
 -- ABA ABOUT
 -- ============================================================
+
+-- Função helper: cria 1 card "Indicador N" com 47% de largura
+-- Indicador 1 = Painel HUB + versão
+-- Indicadores 2/3/4 = vazios
 local function CreateVersionIndicator(index, layoutOrder)
     local card = Create("Frame", {
         Size = UDim2.new(0.47,0,0,70),
@@ -1234,32 +1330,48 @@ local function CreateVersionIndicator(index, layoutOrder)
     }, AboutPage.Rows)
     Create("UICorner", { CornerRadius = UDim.new(0,8) }, card)
     local stroke = Create("UIStroke", { Color = Theme.Accent, Thickness = 1.2, Transparency = 0.5 }, card)
+
     local title = nil
     local value = nil
+
     if index == 1 then
         title = Create("TextLabel", {
-            Size = UDim2.new(1,0,0,26), Position = UDim2.fromOffset(0,12),
-            BackgroundTransparency = 1, Text = "🌙 Painel HUB",
-            TextColor3 = Theme.Text, TextSize = 14, Font = Enum.Font.GothamBold,
+            Size = UDim2.new(1,0,0,26),
+            Position = UDim2.fromOffset(0,12),
+            BackgroundTransparency = 1,
+            Text = "🌙 Painel HUB",
+            TextColor3 = Theme.Text,
+            TextSize = 14,
+            Font = Enum.Font.GothamBold,
             TextXAlignment = Enum.TextXAlignment.Center
         }, card)
+
         value = Create("TextLabel", {
-            Size = UDim2.new(1,0,0,20), Position = UDim2.fromOffset(0,38),
-            BackgroundTransparency = 1, Text = "Versão: " .. HUB_VERSION,
-            TextColor3 = Theme.Accent, TextSize = 12, Font = Enum.Font.GothamBold,
+            Size = UDim2.new(1,0,0,20),
+            Position = UDim2.fromOffset(0,38),
+            BackgroundTransparency = 1,
+            Text = "Versão: " .. HUB_VERSION,
+            TextColor3 = Theme.Accent,
+            TextSize = 12,
+            Font = Enum.Font.GothamBold,
             TextXAlignment = Enum.TextXAlignment.Center
         }, card)
     end
+
     return card, stroke, title, value
 end
 
+-- Linha 1: Indicador 1 + Indicador 2 (alinhados à direita)
 local AboutRow1 = Create("Frame", {
-    Size = UDim2.new(1,-12,0,70), BackgroundTransparency = 1, LayoutOrder = 900
+    Size = UDim2.new(1,-12,0,70),
+    BackgroundTransparency = 1,
+    LayoutOrder = 900
 }, AboutPage.Rows)
 Create("UIListLayout", {
     FillDirection = Enum.FillDirection.Horizontal,
     HorizontalAlignment = Enum.HorizontalAlignment.Right,
-    Padding = UDim.new(0,8), SortOrder = Enum.SortOrder.LayoutOrder
+    Padding = UDim.new(0,8),
+    SortOrder = Enum.SortOrder.LayoutOrder
 }, AboutRow1)
 
 local VerCard1, VerStroke1, VerTitle1, VerValue1 = CreateVersionIndicator(1, 1)
@@ -1267,13 +1379,17 @@ VerCard1.Parent = AboutRow1
 local VerCard2, VerStroke2, VerTitle2, VerValue2 = CreateVersionIndicator(2, 2)
 VerCard2.Parent = AboutRow1
 
+-- Linha 2: Indicador 3 + Indicador 4 (alinhados à direita)
 local AboutRow2 = Create("Frame", {
-    Size = UDim2.new(1,-12,0,70), BackgroundTransparency = 1, LayoutOrder = 901
+    Size = UDim2.new(1,-12,0,70),
+    BackgroundTransparency = 1,
+    LayoutOrder = 901
 }, AboutPage.Rows)
 Create("UIListLayout", {
     FillDirection = Enum.FillDirection.Horizontal,
     HorizontalAlignment = Enum.HorizontalAlignment.Right,
-    Padding = UDim.new(0,8), SortOrder = Enum.SortOrder.LayoutOrder
+    Padding = UDim.new(0,8),
+    SortOrder = Enum.SortOrder.LayoutOrder
 }, AboutRow2)
 
 local VerCard3, VerStroke3, VerTitle3, VerValue3 = CreateVersionIndicator(3, 3)
@@ -1281,54 +1397,79 @@ VerCard3.Parent = AboutRow2
 local VerCard4, VerStroke4, VerTitle4, VerValue4 = CreateVersionIndicator(4, 4)
 VerCard4.Parent = AboutRow2
 
+-- ============================================================
+-- ✅ CRIADOR (card com avatar + nick + ID) — 94% centralizado
+-- ============================================================
 local CREATOR_ID   = 493241893
 local CREATOR_NAME = "Guilherme_FOX123"
 
 Create("Frame", { Size = UDim2.new(1,0,0,10), BackgroundTransparency = 1, LayoutOrder = 902 }, AboutPage.Rows)
 
+-- Wrapper pra centralizar o card de 94%
 local CreatorWrapper = Create("Frame", {
-    Size = UDim2.new(1,-12,0,80), BackgroundTransparency = 1, LayoutOrder = 903
+    Size = UDim2.new(1,-12,0,80),
+    BackgroundTransparency = 1,
+    LayoutOrder = 903
 }, AboutPage.Rows)
 
 local CreatorCard = Create("Frame", {
-    Size = UDim2.new(0.94,0,1,0), Position = UDim2.new(0.03,0,0,0),
-    BackgroundColor3 = Theme.Header, BorderSizePixel = 0
+    Size = UDim2.new(0.94,0,1,0),
+    Position = UDim2.new(0.03,0,0,0),
+    BackgroundColor3 = Theme.Header,
+    BorderSizePixel = 0
 }, CreatorWrapper)
 Create("UICorner", { CornerRadius = UDim.new(0,10) }, CreatorCard)
 local CreatorStroke = Create("UIStroke", { Color = Theme.Accent, Thickness = 1.2, Transparency = 0.4 }, CreatorCard)
 
+-- Avatar
 local AvatarFrame = Create("Frame", {
-    Size = UDim2.fromOffset(60,60), Position = UDim2.fromOffset(10,10),
-    BackgroundColor3 = Theme.Main, BorderSizePixel = 0
+    Size = UDim2.fromOffset(60,60),
+    Position = UDim2.fromOffset(10,10),
+    BackgroundColor3 = Theme.Main,
+    BorderSizePixel = 0
 }, CreatorCard)
 Create("UICorner", { CornerRadius = UDim.new(1,0) }, AvatarFrame)
 local AvatarStroke = Create("UIStroke", { Color = Theme.Accent, Thickness = 1.5, Transparency = 0.3 }, AvatarFrame)
 
 local AvatarImage = Create("ImageLabel", {
-    Size = UDim2.fromScale(1,1), BackgroundTransparency = 1,
+    Size = UDim2.fromScale(1,1),
+    BackgroundTransparency = 1,
     Image = "rbxthumb://type=AvatarHeadShot&id=" .. CREATOR_ID .. "&w=150&h=150",
     ScaleType = Enum.ScaleType.Fit
 }, AvatarFrame)
 Create("UICorner", { CornerRadius = UDim.new(1,0) }, AvatarImage)
 
+-- Info
 local CreatorTitle = Create("TextLabel", {
-    Size = UDim2.new(1,-85,0,18), Position = UDim2.fromOffset(80,10),
-    BackgroundTransparency = 1, Text = "👑  Criador",
-    TextColor3 = Theme.Accent, TextSize = 11, Font = Enum.Font.GothamBold,
+    Size = UDim2.new(1,-85,0,18),
+    Position = UDim2.fromOffset(80,10),
+    BackgroundTransparency = 1,
+    Text = "👑  Criador",
+    TextColor3 = Theme.Accent,
+    TextSize = 11,
+    Font = Enum.Font.GothamBold,
     TextXAlignment = Enum.TextXAlignment.Left
 }, CreatorCard)
 
 local CreatorName = Create("TextLabel", {
-    Size = UDim2.new(1,-85,0,24), Position = UDim2.fromOffset(80,30),
-    BackgroundTransparency = 1, Text = CREATOR_NAME,
-    TextColor3 = Theme.Text, TextSize = 17, Font = Enum.Font.GothamBold,
+    Size = UDim2.new(1,-85,0,24),
+    Position = UDim2.fromOffset(80,30),
+    BackgroundTransparency = 1,
+    Text = CREATOR_NAME,
+    TextColor3 = Theme.Text,
+    TextSize = 17,
+    Font = Enum.Font.GothamBold,
     TextXAlignment = Enum.TextXAlignment.Left
 }, CreatorCard)
 
 local CreatorId = Create("TextLabel", {
-    Size = UDim2.new(1,-85,0,16), Position = UDim2.fromOffset(80,56),
-    BackgroundTransparency = 1, Text = "ID: " .. tostring(CREATOR_ID),
-    TextColor3 = Theme.Accent, TextSize = 10, Font = Enum.Font.Gotham,
+    Size = UDim2.new(1,-85,0,16),
+    Position = UDim2.fromOffset(80,56),
+    BackgroundTransparency = 1,
+    Text = "ID: " .. tostring(CREATOR_ID),
+    TextColor3 = Theme.Accent,
+    TextSize = 10,
+    Font = Enum.Font.Gotham,
     TextXAlignment = Enum.TextXAlignment.Left
 }, CreatorCard)
 
@@ -1376,16 +1517,20 @@ ApplyTheme = function(name)
             end
         end
     end
+    -- ✅ INDICADORES
     if VerCard1 then VerCard1.BackgroundColor3 = theme.Button end
     if VerStroke1 then VerStroke1.Color = theme.Accent end
     if VerTitle1 then VerTitle1.TextColor3 = theme.Text end
     if VerValue1 then VerValue1.TextColor3 = theme.Accent end
+
     if VerCard2 then VerCard2.BackgroundColor3 = theme.Button end
     if VerStroke2 then VerStroke2.Color = theme.Accent end
     if VerCard3 then VerCard3.BackgroundColor3 = theme.Button end
     if VerStroke3 then VerStroke3.Color = theme.Accent end
     if VerCard4 then VerCard4.BackgroundColor3 = theme.Button end
     if VerStroke4 then VerStroke4.Color = theme.Accent end
+
+    -- ✅ CRIADOR
     if CreatorCard then
         CreatorCard.BackgroundColor3 = theme.Header
         if CreatorStroke then CreatorStroke.Color = theme.Accent end
@@ -1454,27 +1599,10 @@ end
 local function ConfigPath(name) return SaveFolder .. "/" .. name .. ".json" end
 local function SetSaveStatus(message) if SaveStatus and SaveStatus.Parent then SaveStatus.Text = "Status: " .. message end end
 
--- ✅ SNAPSHOT com extensões
 local function MakeSnapshot()
-    local data = { Version = 2, Theme = CurrentTheme, Settings = {}, Extensions = {} }
+    local data = { Version = 1, Theme = CurrentTheme, Settings = {} }
     for key, value in pairs(Settings) do
-        if type(value) == "boolean" or type(value) == "number" then
-            data.Settings[key] = value
-        end
-    end
-    for extName, ext in pairs(_G.NoturnoHub_Extensions) do
-        if type(ext) == "table" and type(ext.GetSettings) == "function" then
-            local ok, s = pcall(ext.GetSettings)
-            if ok and type(s) == "table" then
-                local copy = {}
-                for k, v in pairs(s) do
-                    if type(v) == "boolean" or type(v) == "number" then
-                        copy[k] = v
-                    end
-                end
-                data.Extensions[extName] = copy
-            end
-        end
+        if type(value) == "boolean" or type(value) == "number" then data.Settings[key] = value end
     end
     return data
 end
@@ -1524,21 +1652,6 @@ local function LoadConfig(name)
         end
     end
     if type(data.Theme) == "string" and Themes[data.Theme] then ApplyTheme(data.Theme) end
-
-    -- ✅ APLICA EXTENSÕES
-    if type(data.Extensions) == "table" then
-        _G.NoturnoHub_LastLoaded = data.Extensions
-        local applied = 0
-        for extName, extData in pairs(data.Extensions) do
-            local ext = _G.NoturnoHub_Extensions[extName]
-            if ext and type(ext.SetSettings) == "function" then
-                local okExt = pcall(ext.SetSettings, extData)
-                if okExt then applied = applied + 1 end
-            end
-        end
-        print("[" .. HUB_NAME .. "] Extensões carregadas: " .. applied .. "/" .. #(function() local t={} for k in pairs(data.Extensions) do t[#t+1]=k end return t end)())
-    end
-
     SelectedConfig = name; SetSaveStatus("'" .. name .. "' carregada!")
     return true
 end
@@ -1630,7 +1743,6 @@ for _,obj in ipairs(bg:GetDescendants()) do
     if obj:IsA("Frame") then TweenService:Create(obj, TweenInfo.new(FADE), {BackgroundTransparency = 1}):Play() end
 end
 fadeTween:Play()
-fadeTween:Completed:Wait()
+fadeTween.Completed:Wait()
 LoaderGui:Destroy()
 print("[" .. HUB_NAME .. "] v" .. HUB_VERSION .. " carregado!")
-print("[Save] Registry de extensões inicializado — pronto pra receber Combat/Troll/Farm")
