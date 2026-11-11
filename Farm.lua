@@ -1,20 +1,21 @@
 --[[
     NOTURNO HUB - EXTENSÃO: ABA FARM
-     Versão: 1.0.8.2
+     Versão: 1.0.8.3
      Base: 1.0.8.1
 
-     Novidades 1.0.8.2:
-       ✅ Mochila reseta ao fim da partida (RoundEnd)
-       ✅ Display volta pra "aguardando..." automaticamente
-       ✅ Função ResetBag() centralizada (usada em RoundEnd,
-          CoinsStarted e CharacterAdded)
+     Novidades 1.0.8.3:
+       ✅ Mochila NÃO reseta ao fim da partida — mantém o valor exibido
+       ✅ Identifica que saiu da rodada (FarmState.InRound = false)
+       ✅ Display mostra ⏳ indicando valor da rodada anterior
+       ✅ Só reseta quando a próxima rodada começar
+       ✅ CharacterAdded respeita InRound (não reseta fora de rodada)
 
      Herdado 1.0.8.1:
        ✅ Injeta versão no ABOUT (Indicador 4)
 ]]
 
 local HUB_NAME = "NOTURNO HUB"
-local EXT_VERSION = "1.0.8.2"
+local EXT_VERSION = "1.0.8.3"
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -446,6 +447,7 @@ local FarmState = {
     ResetUsedThisRound = false,
     LastStatus = "",
     StealCount = 0,
+    InRound = false,  -- ✅ NOVO: indica se está em rodada ativa
 }
 
 local FarmSettings = {
@@ -483,6 +485,7 @@ local function SetFarmStatus(text)
     end
 end
 
+-- ✅ Display mostra ⏳ quando fora de rodada mas ainda com valores
 local function UpdateBagDisplay()
     local title = FarmUI.BagTitle
     local fill = FarmUI.BagFill
@@ -494,15 +497,20 @@ local function UpdateBagDisplay()
         return
     end
     local pct = math.clamp(FarmState.BagCurrent / FarmState.BagMaximum, 0, 1)
-    title.Text = string.format("MOCHILA: %d/%d (%d%%)",
-        FarmState.BagCurrent, FarmState.BagMaximum, math.floor(pct*100))
+    -- ✅ Mostra ⏳ se estiver fora de rodada mas com valores salvos
+    local roundTag = ""
+    if not FarmState.InRound and FarmState.BagCurrent > 0 then
+        roundTag = " ⏳"
+    end
+    title.Text = string.format("MOCHILA: %d/%d (%d%%)%s",
+        FarmState.BagCurrent, FarmState.BagMaximum, math.floor(pct*100), roundTag)
     fill.Size = UDim2.new(pct, 0, 1, 0)
     if pct >= 1 then fill.BackgroundColor3 = Color3.fromRGB(255,45,65)
     elseif pct >= 0.75 then fill.BackgroundColor3 = Color3.fromRGB(255,170,50)
     else fill.BackgroundColor3 = Color3.fromRGB(100,255,130) end
 end
 
--- ✅ NOVO: reset centralizado da mochila
+-- ✅ Reset centralizado (só chamado quando realmente precisa)
 local function ResetBag()
     FarmState.BagCurrent = 0
     FarmState.BagMaximum = 0
@@ -978,9 +986,10 @@ if CoinCollected and CoinCollected:IsA("RemoteEvent") then
     end))
 end
 
--- ✅ Usa ResetBag() centralizado
+-- ✅ Só reseta quando a nova rodada começa
 local function OnRoundReset()
     ResetBag()
+    FarmState.InRound = true  -- ✅ Marca como em rodada
     StopFarm()
     if FarmSettings.AutoFarm then
         SetFarmStatus("nova rodada, retomando...")
@@ -999,24 +1008,32 @@ end
 if RoundStart and RoundStart:IsA("RemoteEvent") then
     TrackConn(RoundStart.OnClientEvent:Connect(function()
         RoundActive = true
+        FarmState.InRound = true  -- ✅ Marca como em rodada
         FarmState.ResetUsedThisRound = false
         FarmState.StealCount = 0
     end))
 end
--- ✅ NOVO: reseta a mochila ao fim da partida
+
+-- ✅ NOVO: fim da partida NÃO reseta — só marca como fora e mantém valores
 if RoundEnd and RoundEnd:IsA("RemoteEvent") then
     TrackConn(RoundEnd.OnClientEvent:Connect(function()
         RoundActive = false
+        FarmState.InRound = false  -- ✅ Saiu da rodada
         StopFarm()
-        ResetBag()
-        SetFarmStatus("partida encerrada — mochila resetada")
+        SetFarmStatus("partida encerrada — aguardando próxima rodada")
+        -- ✅ NÃO chama ResetBag() — mantém valores exibidos com ⏳
+        UpdateBagDisplay()
     end))
 end
 
--- ✅ CharacterAdded também usa ResetBag()
+-- ✅ CharacterAdded respeita InRound
 TrackConn(LocalPlayer.CharacterAdded:Connect(function()
     StopFarmNoclip()
-    ResetBag()
+    -- ✅ Só reseta se estava em rodada (morreu no meio)
+    -- Se estava fora (fim de partida), mantém valores
+    if FarmState.InRound then
+        ResetBag()
+    end
     FarmState.Target = nil
     FarmState.Waiting = false
     UpdateBagDisplay()
@@ -1103,3 +1120,4 @@ end)
 
 print("[" .. HUB_NAME .. "] Extensão FARM v" .. EXT_VERSION .. " | Tema: " .. CurrentThemeName)
 print("[About] Versão do Farm injetada no Indicador 4")
+print("[Bag] Fim de partida mantém valores — reseta só na próxima rodada")
