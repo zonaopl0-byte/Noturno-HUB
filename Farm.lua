@@ -1,16 +1,20 @@
 --[[
     NOTURNO HUB - EXTENSÃO: ABA FARM
-     Versão: 1.0.8.1
-     Base: 1.0.8 (original)
+     Versão: 1.0.8.2
+     Base: 1.0.8.1
 
-     Única mudança nesta versão:
-       ✅ Injeta versão no ABOUT automaticamente (Indicador 4)
+     Novidades 1.0.8.2:
+       ✅ Mochila reseta ao fim da partida (RoundEnd)
+       ✅ Display volta pra "aguardando..." automaticamente
+       ✅ Função ResetBag() centralizada (usada em RoundEnd,
+          CoinsStarted e CharacterAdded)
 
-     Tudo o resto é IGUAL à v1.0.8 original.
+     Herdado 1.0.8.1:
+       ✅ Injeta versão no ABOUT (Indicador 4)
 ]]
 
 local HUB_NAME = "NOTURNO HUB"
-local EXT_VERSION = "1.0.8.1"
+local EXT_VERSION = "1.0.8.2"
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -105,7 +109,6 @@ local Theme = Themes[CurrentThemeName] or Themes.Noturno
 local AllUIElements = {}
 local function Register(entry) table.insert(AllUIElements, entry) end
 
--- ✅ ABOUT state (adicionado)
 local AboutCard = nil
 local AboutCardStroke = nil
 local AboutTitle = nil
@@ -154,7 +157,7 @@ local function ReapplyTheme()
 end
 
 -- ============================================================
--- ✅ INJEÇÃO NO ABOUT (Indicador 4)
+-- INJEÇÃO NO ABOUT
 -- ============================================================
 local function FindAboutRows()
     if not AboutPage then
@@ -282,7 +285,7 @@ local function RemoveAboutInjection()
 end
 
 -- ============================================================
--- HELPERS (iguais à v1.0.8)
+-- HELPERS
 -- ============================================================
 local function GetRoot(player)
     local p = player or LocalPlayer
@@ -354,26 +357,23 @@ local function IsInActiveRound()
     if not container then
         return false, "fora de partida"
     end
-
     if RoundActive == false then
         return false, "round encerrado"
     end
     if RoundActive == true then
         return true, "em partida"
     end
-
     if HasRoundTool() then
         return true, "em partida (tem ferramenta)"
     end
     if IsNearMap(root) then
         return true, "em partida (perto do mapa)"
     end
-
     return false, "aguardando início da rodada"
 end
 
 -- ============================================================
--- NOCLIP FARM (iguais à v1.0.8)
+-- NOCLIP FARM
 -- ============================================================
 local FarmNoclipActive = false
 local FarmNoclipSaved = {}
@@ -433,7 +433,7 @@ local function SyncFarmNoclip(shouldBeOn)
 end
 
 -- ============================================================
--- ESTADO (iguais à v1.0.8)
+-- ESTADO
 -- ============================================================
 local FarmState = {
     Conn = nil,
@@ -473,7 +473,7 @@ local RoundStart = Gameplay and Gameplay:FindFirstChild("RoundStart")
 local RoundEnd = Gameplay and Gameplay:FindFirstChild("RoundEnd")
 
 -- ============================================================
--- LÓGICA (iguais à v1.0.8)
+-- LÓGICA
 -- ============================================================
 local function SetFarmStatus(text)
     if FarmState.LastStatus == text then return end
@@ -500,6 +500,15 @@ local function UpdateBagDisplay()
     if pct >= 1 then fill.BackgroundColor3 = Color3.fromRGB(255,45,65)
     elseif pct >= 0.75 then fill.BackgroundColor3 = Color3.fromRGB(255,170,50)
     else fill.BackgroundColor3 = Color3.fromRGB(100,255,130) end
+end
+
+-- ✅ NOVO: reset centralizado da mochila
+local function ResetBag()
+    FarmState.BagCurrent = 0
+    FarmState.BagMaximum = 0
+    FarmState.ResetUsedThisRound = false
+    FarmState.StealCount = 0
+    UpdateBagDisplay()
 end
 
 local function IsBagFull()
@@ -697,7 +706,7 @@ local function StartFarm()
 end
 
 -- ============================================================
--- UI HELPERS (iguais à v1.0.8)
+-- UI HELPERS
 -- ============================================================
 local function AddHeader(parent, text, order)
     local lbl = Create("TextLabel", {
@@ -895,7 +904,7 @@ Create("UIListLayout", {
 }, Col)
 
 -- ============================================================
--- INJEÇÃO (igual v1.0.8)
+-- INJEÇÃO
 -- ============================================================
 AddHeader(Col, "💰 AUTO FARM", 1)
 
@@ -950,7 +959,7 @@ FarmUI.StatusLabel = Create("TextLabel", {
 Register({ Type = "Status", Obj = FarmUI.StatusLabel })
 
 -- ============================================================
--- SINAIS (igual v1.0.8)
+-- SINAIS
 -- ============================================================
 local SignalConns = {}
 local function TrackConn(conn)
@@ -969,12 +978,9 @@ if CoinCollected and CoinCollected:IsA("RemoteEvent") then
     end))
 end
 
+-- ✅ Usa ResetBag() centralizado
 local function OnRoundReset()
-    FarmState.BagCurrent = 0
-    FarmState.BagMaximum = 0
-    FarmState.ResetUsedThisRound = false
-    FarmState.StealCount = 0
-    UpdateBagDisplay()
+    ResetBag()
     StopFarm()
     if FarmSettings.AutoFarm then
         SetFarmStatus("nova rodada, retomando...")
@@ -997,21 +1003,20 @@ if RoundStart and RoundStart:IsA("RemoteEvent") then
         FarmState.StealCount = 0
     end))
 end
+-- ✅ NOVO: reseta a mochila ao fim da partida
 if RoundEnd and RoundEnd:IsA("RemoteEvent") then
     TrackConn(RoundEnd.OnClientEvent:Connect(function()
         RoundActive = false
         StopFarm()
-        if FarmSettings.AutoFarm then
-            SetFarmStatus("aguardando próxima rodada")
-        end
+        ResetBag()
+        SetFarmStatus("partida encerrada — mochila resetada")
     end))
 end
 
+-- ✅ CharacterAdded também usa ResetBag()
 TrackConn(LocalPlayer.CharacterAdded:Connect(function()
     StopFarmNoclip()
-    FarmState.BagCurrent = 0
-    FarmState.BagMaximum = 0
-    FarmState.ResetUsedThisRound = false
+    ResetBag()
     FarmState.Target = nil
     FarmState.Waiting = false
     UpdateBagDisplay()
@@ -1042,7 +1047,7 @@ task.spawn(function()
 end)
 
 -- ============================================================
--- ✅ INJETA NO ABOUT (única novidade)
+-- INJETA NO ABOUT
 -- ============================================================
 task.spawn(function()
     task.wait(0.8)
@@ -1065,7 +1070,7 @@ task.spawn(function()
 end)
 
 -- ============================================================
--- TEMA (igual v1.0.8)
+-- TEMA
 -- ============================================================
 task.spawn(function()
     local lastTheme = CurrentThemeName
@@ -1082,7 +1087,7 @@ task.spawn(function()
 end)
 
 -- ============================================================
--- CLEANUP (igual v1.0.8 + remoção do ABOUT)
+-- CLEANUP
 -- ============================================================
 ScreenGui.AncestryChanged:Connect(function()
     if not ScreenGui.Parent then
