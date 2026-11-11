@@ -1,21 +1,23 @@
 --[[
     NOTURNO HUB - EXTENSÃO: ABA FARM
-     Versão: 1.0.8.5
-     Base: 1.0.8.4
+     Versão: 1.0.8.6
+     Base: 1.0.8.5
 
-     Novidades 1.0.8.5:
-       ✅ Mochila RESETA ao fim da rodada (RoundEnd)
+     Novidades 1.0.8.6:
+       ✅ Mochila reseta no FIM da rodada (RoundEnd)
+       ✅ Mochila reseta no INÍCIO da rodada (RoundStart + CoinsStarted)
        ✅ Morrer NA PARTIDA continua NÃO resetando (v1.0.8.4)
-       ✅ Próxima rodada começa com mochila zerada
 
+     Herdado 1.0.8.5:
+       - ResetBag() no RoundEnd
      Herdado 1.0.8.4:
-       - Morrer não reseta (DeadButKeptBag)
+       - DeadButKeptBag (morte não reseta)
      Herdado 1.0.8.1:
        - Injeta versão no ABOUT (Indicador 4)
 ]]
 
 local HUB_NAME = "NOTURNO HUB"
-local EXT_VERSION = "1.0.8.5"
+local EXT_VERSION = "1.0.8.6"
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -1000,22 +1002,26 @@ local function OnRoundReset()
     end
 end
 
+-- ✅ INÍCIO da rodada — reseta via CoinsStarted
 if CoinsStarted and CoinsStarted:IsA("RemoteEvent") then
     TrackConn(CoinsStarted.OnClientEvent:Connect(function()
         RoundActive = true
         OnRoundReset()
     end))
 end
+
+-- ✅ INÍCIO da rodada — reseta via RoundStart também
 if RoundStart and RoundStart:IsA("RemoteEvent") then
     TrackConn(RoundStart.OnClientEvent:Connect(function()
         RoundActive = true
+        ResetBag()
         FarmState.InRound = true
         FarmState.ResetUsedThisRound = false
         FarmState.StealCount = 0
     end))
 end
 
--- ✅ NOVO: fim da partida RESETA a mochila (voltou comportamento v1.0.8.2)
+-- ✅ FIM da rodada — reseta via RoundEnd
 if RoundEnd and RoundEnd:IsA("RemoteEvent") then
     TrackConn(RoundEnd.OnClientEvent:Connect(function()
         RoundActive = false
@@ -1026,7 +1032,7 @@ if RoundEnd and RoundEnd:IsA("RemoteEvent") then
     end))
 end
 
--- ✅ Morrer NA PARTIDA continua NÃO resetando (v1.0.8.4)
+-- ✅ Morrer NA PARTIDA continua NÃO resetando
 TrackConn(LocalPlayer.CharacterAdded:Connect(function()
     StopFarmNoclip()
     if FarmState.InRound and FarmState.BagCurrent > 0 then
@@ -1119,4 +1125,4 @@ end)
 
 print("[" .. HUB_NAME .. "] Extensão FARM v" .. EXT_VERSION .. " | Tema: " .. CurrentThemeName)
 print("[About] Versão do Farm injetada no Indicador 4")
-print("[Bag] Fim de rodada reseta — morte não")
+print("[Bag] Reseta no FIM e no INÍCIO de cada rodada")
