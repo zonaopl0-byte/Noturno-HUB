@@ -1,23 +1,21 @@
 --[[
     NOTURNO HUB - EXTENSÃO: ABA FARM
-     Versão: 1.0.8.4
-     Base: 1.0.8.3
+     Versão: 1.0.8.5
+     Base: 1.0.8.4
 
-     Novidades 1.0.8.4:
-       ✅ Morrer NA PARTIDA não reseta mais a mochila
-       ✅ Mochila só reseta quando a PRÓXIMA RODADA começar
-       ✅ Display mantém valor mesmo após respawn
-       ✅ ⏳ indica "fora de rodada" ou "aguardando sync"
+     Novidades 1.0.8.5:
+       ✅ Mochila RESETA ao fim da rodada (RoundEnd)
+       ✅ Morrer NA PARTIDA continua NÃO resetando (v1.0.8.4)
+       ✅ Próxima rodada começa com mochila zerada
 
-     Herdado 1.0.8.3:
-       - Fim de partida mantém valor
-       - InRound flag
+     Herdado 1.0.8.4:
+       - Morrer não reseta (DeadButKeptBag)
      Herdado 1.0.8.1:
        - Injeta versão no ABOUT (Indicador 4)
 ]]
 
 local HUB_NAME = "NOTURNO HUB"
-local EXT_VERSION = "1.0.8.4"
+local EXT_VERSION = "1.0.8.5"
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -450,7 +448,7 @@ local FarmState = {
     LastStatus = "",
     StealCount = 0,
     InRound = false,
-    DeadButKeptBag = false,  -- ✅ NOVO: marca que morreu mas manteve a mochila
+    DeadButKeptBag = false,
 }
 
 local FarmSettings = {
@@ -488,7 +486,6 @@ local function SetFarmStatus(text)
     end
 end
 
--- ✅ Display mostra ⏳ quando fora de rodada OU após morte (mochila mantida)
 local function UpdateBagDisplay()
     local title = FarmUI.BagTitle
     local fill = FarmUI.BagFill
@@ -983,10 +980,7 @@ if CoinCollected and CoinCollected:IsA("RemoteEvent") then
         if cur and max and max > 0 then
             FarmState.BagCurrent = cur
             FarmState.BagMaximum = max
-            -- ✅ Se o server mandou valor > 0, significa que a mochila ainda tem coisa
-            -- Se mandou 0/0, o server resetou
             if cur == 0 and FarmState.DeadButKeptBag then
-                -- server confirmou que zerou, aí aceita o reset
                 FarmState.DeadButKeptBag = false
             end
             UpdateBagDisplay()
@@ -1021,21 +1015,20 @@ if RoundStart and RoundStart:IsA("RemoteEvent") then
     end))
 end
 
--- Fim da partida mantém valores
+-- ✅ NOVO: fim da partida RESETA a mochila (voltou comportamento v1.0.8.2)
 if RoundEnd and RoundEnd:IsA("RemoteEvent") then
     TrackConn(RoundEnd.OnClientEvent:Connect(function()
         RoundActive = false
         FarmState.InRound = false
         StopFarm()
-        SetFarmStatus("partida encerrada — aguardando próxima rodada")
-        UpdateBagDisplay()
+        ResetBag()
+        SetFarmStatus("partida encerrada — mochila resetada")
     end))
 end
 
--- ✅ NOVO: CharacterAdded NÃO reseta mais a mochila
+-- ✅ Morrer NA PARTIDA continua NÃO resetando (v1.0.8.4)
 TrackConn(LocalPlayer.CharacterAdded:Connect(function()
     StopFarmNoclip()
-    -- ✅ Se estava em rodada e morreu, marca que manteve a mochila
     if FarmState.InRound and FarmState.BagCurrent > 0 then
         FarmState.DeadButKeptBag = true
         print("[Farm] Morreu na partida — mochila mantida:", FarmState.BagCurrent, "/", FarmState.BagMaximum)
@@ -1126,4 +1119,4 @@ end)
 
 print("[" .. HUB_NAME .. "] Extensão FARM v" .. EXT_VERSION .. " | Tema: " .. CurrentThemeName)
 print("[About] Versão do Farm injetada no Indicador 4")
-print("[Bag] Morte NÃO reseta — só próxima rodada")
+print("[Bag] Fim de rodada reseta — morte não")
